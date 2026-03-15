@@ -5,6 +5,7 @@ Layout, widgets, and rendering only.
 All business logic is delegated to analytics.py.
 """
 
+import base64
 import re
 from io import BytesIO
 from pathlib import Path
@@ -134,7 +135,17 @@ section[data-testid="stSidebar"] label {
 }
 
 /* ── Header ── */
-.hdr        { padding: 1.5rem 0 1.2rem; border-bottom: 1px solid var(--border); margin-bottom: 1.5rem; }
+.hdr {
+    padding: 1.5rem 0 1.2rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+}
+.hdr-logo   { flex-shrink: 0; }
+.hdr-logo img { height: 80px; display: block; }
+.hdr-text   { flex: 1; text-align: center; }
 .hdr-title  { font-size: 2.2rem; font-weight: 800; color: var(--tx); letter-spacing: -0.02em; margin: 0 0 0.25rem; }
 .hdr-title span { color: var(--accent); }
 .hdr-sub    { font-size: 1rem; color: var(--tx2); margin: 0; }
@@ -275,6 +286,16 @@ def inject_css() -> None:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────────
+
+def _logo_b64() -> str:
+    """Return the theme-appropriate MARCAI logo as a base64 data-URI."""
+    is_light = st.session_state.get("theme") == "light"
+    filename = "MarcAI Logo Black.png" if is_light else "MarcAI Logo White.png"
+    logo_path = Path(__file__).parent / filename
+    if not logo_path.exists():
+        return ""
+    return "data:image/png;base64," + base64.b64encode(logo_path.read_bytes()).decode()
+
 
 def _period_to_hebrew(period_str: str) -> str:
     """Convert 'YYYY-MM' string to a Hebrew month label (e.g. 'נובמבר 2025')."""
@@ -660,20 +681,70 @@ def _reset_filters() -> None:
 
 def _render_empty_state() -> None:
     """Render the welcome screen shown before any data is loaded."""
-    st.markdown("""
+    logo_src = _logo_b64()
+    logo_html = (
+        f'<img src="{logo_src}" style="height:72px; margin-top:1.2rem;" alt="MARCAI"/>'
+        if logo_src else ""
+    )
+    st.markdown(f"""
     <div style="display:flex; flex-direction:column; align-items:center;
-                justify-content:center; min-height:55vh; text-align:center; gap:1rem;
+                justify-content:center; min-height:55vh; text-align:center; gap:1.2rem;
                 direction:rtl;">
-      <div style="font-size:3.5rem;">💳</div>
-      <div style="font-size:1.6rem; font-weight:800; color:var(--tx);">
+      <div style="font-size:4.5rem;">💳</div>
+      <div style="font-size:2.4rem; font-weight:800; color:var(--tx); letter-spacing:-0.02em;">
         דשבורד הוצאות אשראי
       </div>
-      <div style="font-size:0.9rem; color:var(--tx2); max-width:380px; line-height:1.7;">
+      <div style="font-size:1.15rem; color:var(--tx2); max-width:480px; line-height:1.8;">
         העלה קובץ PDF של פירוט כרטיס אשראי <b>כאל</b> או <b>ישראכרט</b> מהתפריט הצדדי,
         או לחץ על <b>נתוני הדגמה</b> כדי לראות את הדשבורד בפעולה.
       </div>
+      {logo_html}
     </div>
     """, unsafe_allow_html=True)
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────────
+
+def _check_auth() -> bool:
+    """Return True if the user is authenticated.
+
+    If APP_PASSWORD is not configured in st.secrets the app runs without auth
+    (useful for local development). When configured, shows a centered login form
+    and blocks access until the correct password is entered.
+    """
+    correct_pw: str = st.secrets.get("APP_PASSWORD", "")
+    if not correct_pw:
+        return True  # no password set → open access (local dev)
+
+    if st.session_state.get("authenticated"):
+        return True
+
+    # ── Login screen ──
+    inject_css()
+    logo_src = _logo_b64()
+    logo_html = f'<img src="{logo_src}" style="height:64px; margin-bottom:0.5rem;" alt="MARCAI"/>' if logo_src else ""
+    st.markdown(f"""
+    <div style="display:flex; flex-direction:column; align-items:center;
+                justify-content:center; min-height:60vh; text-align:center; gap:0.6rem;">
+      {logo_html}
+      <div style="font-size:2rem; font-weight:800; color:var(--tx); margin-bottom:0.2rem;">
+        דשבורד הוצאות אשראי
+      </div>
+      <div style="font-size:1rem; color:var(--tx2);">הכנס סיסמה כדי להמשיך</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col = st.columns([1, 1, 1])[1]
+    with col:
+        pw = st.text_input("סיסמה", type="password", label_visibility="collapsed",
+                           placeholder="סיסמה...")
+        if st.button("כניסה", use_container_width=True, type="primary"):
+            if pw == correct_pw:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("סיסמה שגויה")
+    return False
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────────
@@ -686,6 +757,8 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
+    if not _check_auth():
+        return
     inject_css()
 
     # Defaults so variables are always bound even if sidebar runs conditionally
@@ -804,10 +877,15 @@ def main() -> None:
     # ── Header ────────────────────────────────────────────────────────────────────
     is_demo = st.session_state.get("data_source") == "demo"
     subtitle = "נתוני הדגמה — העלה PDF לנתונים אמיתיים" if is_demo else "ניתוח פירוט כרטיס אשראי"
+    logo_src = _logo_b64()
+    logo_html = f'<div class="hdr-logo"><img src="{logo_src}" alt="MARCAI"/></div>' if logo_src else ""
     st.markdown(f"""
     <div class="hdr">
-      <div class="hdr-title">דשבורד <span>הוצאות אשראי</span></div>
-      <div class="hdr-sub">{subtitle}</div>
+      {logo_html}
+      <div class="hdr-text">
+        <div class="hdr-title">דשבורד <span>הוצאות אשראי</span></div>
+        <div class="hdr-sub">{subtitle}</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
