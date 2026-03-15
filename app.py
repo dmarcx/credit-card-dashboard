@@ -457,9 +457,12 @@ def main() -> None:
         if uploaded_files:
             df_parsed, parse_errors = _process_uploads(uploaded_files)
             if df_parsed is not None:
-                if st.session_state.get("data_source") != "pdf":
+                # Reset filters whenever the uploaded file set changes
+                uploaded_key = frozenset((f.name, f.size) for f in uploaded_files)
+                if st.session_state.get("uploaded_key") != uploaded_key:
                     st.session_state.pop("filter_months", None)
                     st.session_state.pop("filter_cats", None)
+                    st.session_state["uploaded_key"] = uploaded_key
                 st.session_state.df_all = df_parsed
                 st.session_state.data_source = "pdf"
             for err in parse_errors:
