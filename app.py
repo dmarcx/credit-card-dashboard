@@ -21,18 +21,34 @@ from analytics import (
 )
 from parser import parse_pdf
 
-# ── Chart Theme ──────────────────────────────────────────────────────────────────
+# ── Theme palettes ───────────────────────────────────────────────────────────────
 
 CHART_COLORS: list[str] = [
     "#f2a900", "#3b82f6", "#10b981", "#f43f5e",
     "#8b5cf6", "#fb923c", "#06b6d4", "#84cc16",
 ]
 
-PLOTLY_PAPER_BG = "#070c18"
-PLOTLY_PLOT_BG  = "#0a0f1e"
-PLOTLY_GRID     = "#1c2d4a"
-PLOTLY_TEXT     = "#7a93b8"
-PLOTLY_TITLE    = "#e2e8f4"
+_DARK = dict(
+    bg="#070c18", bg_card="#0d1422", border="#1c2d4a", border_hi="#243550",
+    accent="#f2a900", accent_dim="rgba(242,169,0,0.12)",
+    blue="#3b82f6", green="#10b981", red="#f43f5e", warn="#f59e0b",
+    tx="#e2e8f4", tx2="#7a93b8", tx3="#3d5270",
+    plotly_paper="#070c18", plotly_plot="#0a0f1e",
+    plotly_grid="#1c2d4a", plotly_text="#7a93b8", plotly_title="#e2e8f4",
+)
+_LIGHT = dict(
+    bg="#f0f4fa", bg_card="#ffffff", border="#d1dce8", border_hi="#b0c0d4",
+    accent="#c98f00", accent_dim="rgba(201,143,0,0.14)",
+    blue="#2563eb", green="#059669", red="#e11d48", warn="#d97706",
+    tx="#0f1b2d", tx2="#4a6480", tx3="#96aabf",
+    plotly_paper="#f0f4fa", plotly_plot="#ffffff",
+    plotly_grid="#d1dce8", plotly_text="#4a6480", plotly_title="#0f1b2d",
+)
+
+
+def _t() -> dict:
+    """Return the active theme palette dict."""
+    return _LIGHT if st.session_state.get("theme") == "light" else _DARK
 
 HEBREW_MONTHS: dict[int, str] = {
     1: "ינואר",  2: "פברואר", 3: "מרץ",     4: "אפריל",
@@ -42,24 +58,9 @@ HEBREW_MONTHS: dict[int, str] = {
 
 # ── CSS ──────────────────────────────────────────────────────────────────────────
 
-_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
+_CSS_IMPORT = "@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');"
 
-:root {
-    --bg:           #070c18;
-    --bg-card:      #0d1422;
-    --border:       #1c2d4a;
-    --border-hi:    #243550;
-    --accent:       #f2a900;
-    --accent-dim:   rgba(242,169,0,0.12);
-    --blue:         #3b82f6;
-    --green:        #10b981;
-    --red:          #f43f5e;
-    --warn:         #f59e0b;
-    --tx:           #e2e8f4;
-    --tx2:          #7a93b8;
-    --tx3:          #3d5270;
-}
+_CSS_STATIC = """
 
 /* ── Global ── */
 html, body, .stApp {
@@ -142,8 +143,8 @@ section[data-testid="stSidebar"] label {
     font-size: 0.97rem; line-height: 1.6;
     border-right: 3px solid;
 }
-.ic.high   { background: rgba(244,63,94,.07);   border-color: var(--red);  color: #fca5a5; }
-.ic.medium { background: rgba(245,158,11,.07); border-color: var(--warn); color: #fcd34d; }
+.ic.high   { background: rgba(244,63,94,.07);   border-color: var(--red);  color: var(--red); }
+.ic.medium { background: rgba(245,158,11,.07); border-color: var(--warn); color: var(--warn); }
 
 /* ── Search Input ── */
 .stTextInput input {
@@ -164,11 +165,15 @@ section[data-testid="stSidebar"] label {
 /* ── Dataframe tables ── */
 [data-testid="stDataFrame"] .ag-cell,
 [data-testid="stDataFrame"] .ag-header-cell-text {
-    font-size: 1rem !important;
+    font-size: 1.35rem !important;
     font-family: 'Heebo', sans-serif !important;
 }
+[data-testid="stDataFrame"] .ag-header-cell-text {
+    font-size: 1.2rem !important;
+    font-weight: 700 !important;
+}
 [data-testid="stDataFrame"] .ag-cell {
-    line-height: 2 !important;
+    line-height: 2.4 !important;
 }
 
 /* ── Misc ── */
@@ -180,8 +185,18 @@ hr { border-color: var(--border) !important; margin: 1.2rem 0 !important; }
 
 
 def inject_css() -> None:
-    """Inject global dark RTL CSS into the Streamlit page."""
-    st.markdown(f"<style>{_CSS}</style>", unsafe_allow_html=True)
+    """Inject theme-aware RTL CSS into the Streamlit page."""
+    p = _t()
+    root = (
+        f":root {{"
+        f"--bg:{p['bg']};--bg-card:{p['bg_card']};--border:{p['border']};"
+        f"--border-hi:{p['border_hi']};--accent:{p['accent']};"
+        f"--accent-dim:{p['accent_dim']};--blue:{p['blue']};--green:{p['green']};"
+        f"--red:{p['red']};--warn:{p['warn']};--tx:{p['tx']};"
+        f"--tx2:{p['tx2']};--tx3:{p['tx3']};}}"
+    )
+    css = _CSS_IMPORT + root + _CSS_STATIC
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────────
@@ -193,20 +208,21 @@ def _period_to_hebrew(period_str: str) -> str:
 
 
 def _dark_layout(fig: go.Figure, title: str = "") -> go.Figure:
-    """Apply the project's dark Plotly theme to a figure."""
+    """Apply the current theme's Plotly styling to a figure."""
+    p = _t()
     fig.update_layout(
         title=dict(
             text=title,
-            font=dict(color=PLOTLY_TITLE, size=18, family="Heebo"),
+            font=dict(color=p["plotly_title"], size=18, family="Heebo"),
             x=1, xanchor="right",
         ),
-        paper_bgcolor=PLOTLY_PAPER_BG,
-        plot_bgcolor=PLOTLY_PLOT_BG,
-        font=dict(color=PLOTLY_TEXT, family="Heebo", size=16),
+        paper_bgcolor=p["plotly_paper"],
+        plot_bgcolor=p["plotly_plot"],
+        font=dict(color=p["plotly_text"], family="Heebo", size=16),
         margin=dict(t=52, b=10, l=10, r=90),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=PLOTLY_TEXT, size=15)),
-        xaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID, tickfont=dict(size=15)),
-        yaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID, tickfont=dict(size=15)),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=p["plotly_text"], size=15)),
+        xaxis=dict(gridcolor=p["plotly_grid"], color=p["plotly_text"], linecolor=p["plotly_grid"], tickfont=dict(size=15)),
+        yaxis=dict(gridcolor=p["plotly_grid"], color=p["plotly_text"], linecolor=p["plotly_grid"], tickfont=dict(size=15)),
     )
     return fig
 
@@ -265,7 +281,7 @@ def render_pie_chart(df: pd.DataFrame) -> None:
         annotations=[dict(
             text=f"₪{df['amount'].sum():,.0f}",
             x=0.5, y=0.5,
-            font=dict(size=22, color=PLOTLY_TITLE, family="IBM Plex Mono"),
+            font=dict(size=22, color=_t()["plotly_title"], family="IBM Plex Mono"),
             showarrow=False,
         )],
     )
@@ -370,8 +386,17 @@ def _process_uploads(files: list) -> tuple[pd.DataFrame | None, list[str]]:
     if not dfs:
         return None, errors
 
+    # Each PDF's statement month = the latest month found in its transactions.
+    # Keep only transactions that belong to that statement month so that
+    # historical carry-over rows from previous months are excluded.
+    filtered: list[pd.DataFrame] = []
+    for df in dfs:
+        statement_month = df["date"].dt.to_period("M").max()
+        filtered.append(df[df["date"].dt.to_period("M") == statement_month])
+
     merged = (
-        pd.concat(dfs, ignore_index=True)
+        pd.concat(filtered, ignore_index=True)
+        .drop_duplicates(subset=["date", "merchant", "amount"])
         .sort_values("date")
         .reset_index(drop=True)
     )
@@ -382,7 +407,8 @@ def _render_empty_state() -> None:
     """Render the welcome screen shown before any data is loaded."""
     st.markdown("""
     <div style="display:flex; flex-direction:column; align-items:center;
-                justify-content:center; min-height:55vh; text-align:center; gap:1rem;">
+                justify-content:center; min-height:55vh; text-align:center; gap:1rem;
+                direction:rtl;">
       <div style="font-size:3.5rem;">💳</div>
       <div style="font-size:1.6rem; font-weight:800; color:var(--tx);">
         דשבורד הוצאות אשראי
@@ -414,6 +440,10 @@ def main() -> None:
     # ── Sidebar ──────────────────────────────────────────────────────────────────
     with st.sidebar:
         st.markdown("### 💳 דשבורד הוצאות")
+        is_light = st.session_state.get("theme") == "light"
+        if st.button("☀️ מוד בהיר" if not is_light else "🌙 מוד כהה", use_container_width=True):
+            st.session_state["theme"] = "light" if not is_light else "dark"
+            st.rerun()
         st.divider()
 
         # File uploader
@@ -463,29 +493,42 @@ def main() -> None:
             # key= lets Streamlit persist selections across reruns via session_state.
             # We only set the initial value; after that Streamlit owns the key.
             if "filter_months" not in st.session_state:
+                # Default to the most recent month only so avg == total on first load
+                st.session_state["filter_months"] = [all_periods[0]]
+
+            col_mlbl, col_mall = st.columns([3, 1])
+            col_mlbl.markdown("**חודשים**")
+            if col_mall.button("הכל", key="btn_all_months", use_container_width=True):
                 st.session_state["filter_months"] = all_periods
             selected_months = st.multiselect(
                 "חודשים",
                 options=all_periods,
                 key="filter_months",
                 format_func=_period_to_hebrew,
+                label_visibility="collapsed",
             )
             st.divider()
 
             all_cats = sorted(df_all["category"].unique().tolist())
             if "filter_cats" not in st.session_state:
                 st.session_state["filter_cats"] = all_cats
+
+            col_clbl, col_call = st.columns([3, 1])
+            col_clbl.markdown("**קטגוריות**")
+            if col_call.button("הכל", key="btn_all_cats", use_container_width=True):
+                st.session_state["filter_cats"] = all_cats
             selected_cats = st.multiselect(
                 "קטגוריות",
                 options=all_cats,
                 key="filter_cats",
+                label_visibility="collapsed",
             )
             st.divider()
 
             source = "קובץ PDF" if st.session_state.get("data_source") == "pdf" else "נתוני הדגמה"
-            n_months = df_all["date"].dt.to_period("M").nunique()
+            n_months_total = df_all["date"].dt.to_period("M").nunique()
             st.caption(f"מקור: {source}")
-            st.caption(f"📊 {len(df_all):,} עסקאות | {n_months} חודשים")
+            st.caption(f"📊 {len(df_all):,} עסקאות | {n_months_total} חודשים בקובץ")
             st.caption("🔒 קבצי PDF לא מועלים ל-GitHub")
 
     # ── Empty state ───────────────────────────────────────────────────────────────
