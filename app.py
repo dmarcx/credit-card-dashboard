@@ -5,7 +5,9 @@ Layout, widgets, and rendering only.
 All business logic is delegated to analytics.py.
 """
 
+import re
 from io import BytesIO
+from pathlib import Path
 
 import streamlit as st
 import plotly.express as px
@@ -26,6 +28,42 @@ from parser import parse_pdf
 # Months with fewer than this many transactions are treated as carry-over
 # artifacts and hidden from the month filter (but still present in the data).
 MIN_MONTH_TRANSACTIONS: int = 3
+
+# ── Billing-month detection ───────────────────────────────────────────────────
+
+_HEBREW_MONTHS: dict[str, int] = {
+    'ינואר': 1,  'פברואר': 2,  'מרץ': 3,    'אפריל': 4,
+    'מאי':   5,  'יוני':   6,  'יולי': 7,   'אוגוסט': 8,
+    'ספטמבר': 9, 'אוקטובר': 10,'נובמבר': 11, 'דצמבר': 12,
+}
+
+
+def _parse_billing_month(filename: str) -> pd.Period | None:
+    """
+    Extract the billing month from a PDF filename.
+
+    Supports:
+      - Numeric:  "כאל 01-26.pdf"           → January 2026   (MM-YY)
+      - Hebrew:   "ישראכרט פברואר 26.pdf"   → February 2026
+    Returns None if the filename contains no recognisable month.
+    """
+    stem = Path(filename).stem
+
+    # Pattern 1: MM-YY  e.g. "01-26"
+    m = re.search(r'\b(\d{2})-(\d{2})\b', stem)
+    if m:
+        month, year = int(m.group(1)), 2000 + int(m.group(2))
+        if 1 <= month <= 12:
+            return pd.Period(year=year, month=month, freq='M')
+
+    # Pattern 2: Hebrew month name + 2-digit year  e.g. "פברואר 26"
+    for heb_name, month_num in _HEBREW_MONTHS.items():
+        if heb_name in stem:
+            yr_m = re.search(r'\b(\d{2})\b', stem)
+            if yr_m:
+                return pd.Period(year=2000 + int(yr_m.group(1)),
+                                 month=month_num, freq='M')
+    return None
 
 CHART_COLORS: list[str] = [
     "#f2a900", "#3b82f6", "#10b981", "#f43f5e",
@@ -378,7 +416,16 @@ def _process_uploads(files: list) -> tuple[pd.DataFrame | None, list[str]]:
         cache_key = f"pdf_{f.name}_{f.size}"
         if cache_key not in st.session_state:
             try:
-                st.session_state[cache_key] = parse_pdf(BytesIO(f.getvalue()))
+                df = parse_pdf(BytesIO(f.getvalue()))
+                # Determine billing month: from filename, or fall back to the
+                # most frequent transaction month in the PDF.
+                billing = _parse_billing_month(f.name)
+                if billing is None:
+                    billing = df["date"].dt.to_period("M").value_counts().idxmax()
+                # Stamp every transaction with the 1st of the billing month so
+                # that all grouping, filtering, and KPIs reflect billing periods.
+                df["date"] = pd.Timestamp(billing.year, billing.month, 1)
+                st.session_state[cache_key] = df
             except ValueError as exc:
                 errors.append(f"❌ {f.name}: {exc}")
                 st.session_state[cache_key] = None
