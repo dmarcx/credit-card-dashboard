@@ -5,6 +5,8 @@ Layout, widgets, and rendering only.
 All business logic is delegated to analytics.py.
 """
 
+from io import BytesIO
+
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
@@ -17,6 +19,7 @@ from analytics import (
     get_top_merchants,
     get_anomalies,
 )
+from parser import parse_pdf
 
 # ── Chart Theme ──────────────────────────────────────────────────────────────────
 
@@ -321,6 +324,64 @@ def render_transactions_table(df: pd.DataFrame) -> None:
     st.caption(f"מציג {len(display):,} מתוך {len(df):,} עסקאות")
 
 
+# ── Upload processing ─────────────────────────────────────────────────────────────
+
+def _process_uploads(files: list) -> tuple[pd.DataFrame | None, list[str]]:
+    """Parse uploaded PDF files and return a merged DataFrame.
+
+    Results are cached in session_state by (name, size) to avoid re-parsing
+    the same file on every Streamlit re-run.
+
+    Args:
+        files: List of Streamlit UploadedFile objects.
+
+    Returns:
+        Tuple of (merged DataFrame or None, list of error messages).
+    """
+    dfs: list[pd.DataFrame] = []
+    errors: list[str] = []
+
+    for f in files:
+        cache_key = f"pdf_{f.name}_{f.size}"
+        if cache_key not in st.session_state:
+            try:
+                st.session_state[cache_key] = parse_pdf(BytesIO(f.getvalue()))
+            except ValueError as exc:
+                errors.append(f"❌ {f.name}: {exc}")
+                st.session_state[cache_key] = None
+
+        cached = st.session_state.get(cache_key)
+        if cached is not None:
+            dfs.append(cached)
+
+    if not dfs:
+        return None, errors
+
+    merged = (
+        pd.concat(dfs, ignore_index=True)
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+    return merged, errors
+
+
+def _render_empty_state() -> None:
+    """Render the welcome screen shown before any data is loaded."""
+    st.markdown("""
+    <div style="display:flex; flex-direction:column; align-items:center;
+                justify-content:center; min-height:55vh; text-align:center; gap:1rem;">
+      <div style="font-size:3.5rem;">💳</div>
+      <div style="font-size:1.6rem; font-weight:800; color:var(--tx);">
+        דשבורד הוצאות אשראי
+      </div>
+      <div style="font-size:0.9rem; color:var(--tx2); max-width:380px; line-height:1.7;">
+        העלה קובץ PDF של פירוט כרטיס אשראי <b>כאל</b> מהתפריט הצדדי,
+        או לחץ על <b>נתוני הדגמה</b> כדי לראות את הדשבורד בפעולה.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -333,51 +394,96 @@ def main() -> None:
     )
     inject_css()
 
-    # Load once, cache in session state to avoid re-generating on every interaction
-    if "df_all" not in st.session_state:
-        st.session_state.df_all = get_mock_data()
-    df_all: pd.DataFrame = st.session_state.df_all
+    # Defaults so variables are always bound even if sidebar runs conditionally
+    selected_months: list[str] = []
+    selected_cats: list[str] = []
 
-    # ── Sidebar filters ──
+    # ── Sidebar ──────────────────────────────────────────────────────────────────
     with st.sidebar:
-        st.markdown("### 💳 סינון נתונים")
+        st.markdown("### 💳 דשבורד הוצאות")
         st.divider()
 
-        all_periods = sorted(
-            df_all["date"].dt.to_period("M").unique().astype(str).tolist(),
-            reverse=True,
+        # File uploader
+        uploaded_files = st.file_uploader(
+            "העלה קבצי PDF",
+            type=["pdf"],
+            accept_multiple_files=True,
+            help="ניתן להעלות מספר קבצי PDF במקביל",
         )
-        selected_months = st.multiselect(
-            "חודשים",
-            options=all_periods,
-            default=all_periods,
-            format_func=_period_to_hebrew,
-        )
-        st.divider()
 
-        all_cats = sorted(df_all["category"].unique().tolist())
-        selected_cats = st.multiselect(
-            "קטגוריות",
-            options=all_cats,
-            default=all_cats,
-        )
-        st.divider()
-        st.caption(f"📊 סה\"כ {len(df_all):,} עסקאות בנתוני ההדגמה")
-        st.caption("🔒 קבצי PDF לא מועלים ל-GitHub")
+        # Parse any newly uploaded files
+        if uploaded_files:
+            df_parsed, parse_errors = _process_uploads(uploaded_files)
+            if df_parsed is not None:
+                st.session_state.df_all = df_parsed
+                st.session_state.data_source = "pdf"
+            for err in parse_errors:
+                st.error(err)
 
-    # ── Apply filters ──
-    if selected_months and selected_cats:
-        month_mask = df_all["date"].dt.to_period("M").astype(str).isin(selected_months)
-        cat_mask   = df_all["category"].isin(selected_cats)
-        df = df_all[month_mask & cat_mask].copy()
-    else:
-        df = df_all.copy()
+        # Demo data button (visible when no PDF data is loaded)
+        if st.session_state.get("data_source") != "pdf":
+            if st.button("🎲 נתוני הדגמה", use_container_width=True):
+                st.session_state.df_all = get_mock_data()
+                st.session_state.data_source = "demo"
 
-    # ── Header ──
-    st.markdown("""
+        # Clear button (visible only when data is present)
+        if st.session_state.get("df_all") is not None:
+            if st.button("🗑️ נקה נתונים", use_container_width=True):
+                st.session_state.clear()
+                st.rerun()
+
+        df_all: pd.DataFrame | None = st.session_state.get("df_all")
+
+        # Filters — shown only after data is loaded
+        if df_all is not None:
+            st.divider()
+
+            all_periods = sorted(
+                df_all["date"].dt.to_period("M").unique().astype(str).tolist(),
+                reverse=True,
+            )
+            selected_months = st.multiselect(
+                "חודשים",
+                options=all_periods,
+                default=all_periods,
+                format_func=_period_to_hebrew,
+            )
+            st.divider()
+
+            all_cats = sorted(df_all["category"].unique().tolist())
+            selected_cats = st.multiselect(
+                "קטגוריות",
+                options=all_cats,
+                default=all_cats,
+            )
+            st.divider()
+
+            source = "קובץ PDF" if st.session_state.get("data_source") == "pdf" else "נתוני הדגמה"
+            n_months = df_all["date"].dt.to_period("M").nunique()
+            st.caption(f"מקור: {source}")
+            st.caption(f"📊 {len(df_all):,} עסקאות | {n_months} חודשים")
+            st.caption("🔒 קבצי PDF לא מועלים ל-GitHub")
+
+    # ── Empty state ───────────────────────────────────────────────────────────────
+    df_all = st.session_state.get("df_all")
+    if df_all is None:
+        _render_empty_state()
+        return
+
+    # ── Apply filters ─────────────────────────────────────────────────────────────
+    df = df_all.copy()
+    if selected_months:
+        df = df[df["date"].dt.to_period("M").astype(str).isin(selected_months)]
+    if selected_cats:
+        df = df[df["category"].isin(selected_cats)]
+
+    # ── Header ────────────────────────────────────────────────────────────────────
+    is_demo = st.session_state.get("data_source") == "demo"
+    subtitle = "נתוני הדגמה — העלה PDF לנתונים אמיתיים" if is_demo else "ניתוח פירוט כרטיס אשראי"
+    st.markdown(f"""
     <div class="hdr">
       <div class="hdr-title">דשבורד <span>הוצאות אשראי</span></div>
-      <div class="hdr-sub">ניתוח חכם של פירוט כרטיס אשראי — נתוני הדגמה</div>
+      <div class="hdr-sub">{subtitle}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -385,10 +491,10 @@ def main() -> None:
         st.warning("אין נתונים תואמים לסינון הנבחר.")
         return
 
-    # ── KPIs ──
+    # ── KPIs ──────────────────────────────────────────────────────────────────────
     render_kpis(compute_kpis(df))
 
-    # ── Charts (pie + bar side by side) ──
+    # ── Charts ────────────────────────────────────────────────────────────────────
     st.markdown('<div class="sec">ניתוח הוצאות</div>', unsafe_allow_html=True)
     col_pie, col_bar = st.columns(2, gap="medium")
     with col_pie:
@@ -396,7 +502,7 @@ def main() -> None:
     with col_bar:
         render_merchants_chart(df)
 
-    # ── Category Summary Table ──
+    # ── Category Summary ──────────────────────────────────────────────────────────
     st.markdown('<div class="sec">סיכום קטגוריות</div>', unsafe_allow_html=True)
     cat_summary = get_category_breakdown(df).copy()
     cat_summary.columns = ["קטגוריה", 'סה"כ (₪)', "עסקאות"]
@@ -407,11 +513,11 @@ def main() -> None:
         column_config={'סה"כ (₪)': st.column_config.NumberColumn(format="₪%.2f")},
     )
 
-    # ── Anomalies ──
+    # ── Anomalies ─────────────────────────────────────────────────────────────────
     st.markdown('<div class="sec">תובנות וחריגים</div>', unsafe_allow_html=True)
     render_anomalies(df)
 
-    # ── Full Transactions Table ──
+    # ── Full Transactions Table ───────────────────────────────────────────────────
     st.markdown('<div class="sec">כל העסקאות</div>', unsafe_allow_html=True)
     render_transactions_table(df)
 
