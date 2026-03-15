@@ -703,50 +703,6 @@ def _render_empty_state() -> None:
     """, unsafe_allow_html=True)
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────────
-
-def _check_auth() -> bool:
-    """Return True if the user is authenticated.
-
-    If APP_PASSWORD is not configured in st.secrets the app runs without auth
-    (useful for local development). When configured, shows a centered login form
-    and blocks access until the correct password is entered.
-    """
-    correct_pw: str = st.secrets.get("APP_PASSWORD", "")
-    if not correct_pw:
-        return True  # no password set → open access (local dev)
-
-    if st.session_state.get("authenticated"):
-        return True
-
-    # ── Login screen ──
-    inject_css()
-    logo_src = _logo_b64()
-    logo_html = f'<img src="{logo_src}" style="height:64px; margin-bottom:0.5rem;" alt="MARCAI"/>' if logo_src else ""
-    st.markdown(f"""
-    <div style="display:flex; flex-direction:column; align-items:center;
-                justify-content:center; min-height:60vh; text-align:center; gap:0.6rem;">
-      {logo_html}
-      <div style="font-size:2rem; font-weight:800; color:var(--tx); margin-bottom:0.2rem;">
-        דשבורד הוצאות אשראי
-      </div>
-      <div style="font-size:1rem; color:var(--tx2);">הכנס סיסמה כדי להמשיך</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    col = st.columns([1, 1, 1])[1]
-    with col:
-        pw = st.text_input("סיסמה", type="password", label_visibility="collapsed",
-                           placeholder="סיסמה...")
-        if st.button("כניסה", use_container_width=True, type="primary"):
-            if pw == correct_pw:
-                st.session_state["authenticated"] = True
-                st.rerun()
-            else:
-                st.error("סיסמה שגויה")
-    return False
-
-
 # ── Main ─────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -757,8 +713,6 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    if not _check_auth():
-        return
     inject_css()
 
     # Defaults so variables are always bound even if sidebar runs conditionally
