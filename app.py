@@ -9,7 +9,10 @@ import re
 from io import BytesIO
 from pathlib import Path
 
+import json
+
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
@@ -19,7 +22,7 @@ from analytics import (
     compute_kpis,
     get_category_breakdown,
     get_top_merchants,
-    get_anomalies,
+    get_insights,
 )
 from parser import parse_pdf
 
@@ -185,8 +188,26 @@ section[data-testid="stSidebar"] label {
     font-size: 0.97rem; line-height: 1.6;
     border-right: 3px solid;
 }
-.ic.high   { background: rgba(244,63,94,.07);   border-color: var(--red);  color: var(--red); }
-.ic.medium { background: rgba(245,158,11,.07); border-color: var(--warn); color: var(--warn); }
+.ic.high      { background: rgba(244,63,94,.07);   border-color: var(--red);    color: var(--red); }
+.ic.medium    { background: rgba(245,158,11,.07); border-color: var(--warn);   color: var(--warn); }
+.ic.recurring { background: rgba(14,165,233,.07);  border-color: var(--blue);   color: var(--blue); }
+.ic.onetime   { background: rgba(52,211,153,.07);  border-color: var(--green);  color: var(--green); }
+.insight-sub {
+    font-size: 0.78rem; font-weight: 700; color: var(--tx3);
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin: 0.9rem 0 0.4rem;
+}
+
+/* ── Category chips ── */
+.chip-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 0.8rem; justify-content: flex-end; }
+/* Streamlit button overrides for chip style */
+[data-testid="stHorizontalBlock"] .stButton button {
+    border-radius: 20px !important;
+    padding: 0.2rem 0.7rem !important;
+    font-size: 0.82rem !important;
+    height: auto !important;
+    min-height: 0 !important;
+}
 
 /* ── Search Input ── */
 .stTextInput input {
@@ -217,6 +238,18 @@ section[data-testid="stSidebar"] label {
 [data-testid="stDataFrame"] .ag-cell {
     line-height: 2.4 !important;
 }
+
+/* ── Plotly modebar (hover toolbar) ── */
+.modebar-container {
+    z-index: 9999 !important;
+    background: var(--bg-card) !important;
+    border-radius: 6px !important;
+    border: 1px solid var(--border) !important;
+    padding: 2px 4px !important;
+}
+.modebar-btn path { fill: var(--tx2) !important; }
+.modebar-btn:hover path { fill: var(--accent) !important; }
+.modebar-btn.active path { fill: var(--accent) !important; }
 
 /* ── Misc ── */
 hr { border-color: var(--border) !important; margin: 1.2rem 0 !important; }
@@ -256,7 +289,8 @@ def _dark_layout(fig: go.Figure, title: str = "") -> go.Figure:
         title=dict(
             text=title,
             font=dict(color=p["plotly_title"], size=18, family="Heebo"),
-            x=1, xanchor="right",
+            x=0, xanchor="left",
+            pad=dict(l=6),
         ),
         paper_bgcolor=p["plotly_paper"],
         plot_bgcolor=p["plotly_plot"],
@@ -300,9 +334,14 @@ def render_kpis(kpis: dict) -> None:
     """, unsafe_allow_html=True)
 
 
-def render_pie_chart(df: pd.DataFrame) -> None:
-    """Render interactive donut pie chart of spending by category."""
-    cat_df = get_category_breakdown(df)
+def render_pie_chart(df: pd.DataFrame, active_cat: str | None = None,
+                     cat_df: pd.DataFrame | None = None) -> None:
+    """Render donut pie chart with pull highlight on the active category."""
+    if cat_df is None:
+        cat_df = _pie_cat_df(df)
+
+    pull_vals = [0.08 if r["category"] == active_cat else 0 for _, r in cat_df.iterrows()]
+
     fig = px.pie(
         cat_df,
         values="total",
@@ -311,28 +350,144 @@ def render_pie_chart(df: pd.DataFrame) -> None:
         hole=0.52,
     )
     fig.update_traces(
-        textposition="outside",
-        textinfo="label+percent",
+        pull=pull_vals,
+        textposition="inside",
+        textinfo="percent",
+        insidetextorientation="radial",
         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
-        textfont_size=15,
+        textfont_size=13,
     )
     fig = _dark_layout(fig, "לפי קטגוריה")
+    p = _t()
     fig.update_layout(
-        showlegend=False,
-        height=440,
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            x=1.02, xanchor="left",
+            y=0.5, yanchor="middle",
+            font=dict(size=13, color=p["plotly_text"]),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        height=460,
+        margin=dict(t=52, b=20, l=10, r=160),
         annotations=[dict(
             text=f"₪{df['amount'].sum():,.0f}",
             x=0.5, y=0.5,
-            font=dict(size=22, color=_t()["plotly_title"], family="IBM Plex Mono"),
+            font=dict(size=22, color=p["plotly_title"], family="IBM Plex Mono"),
             showarrow=False,
         )],
     )
     st.plotly_chart(fig, use_container_width=True)
 
 
-def render_merchants_chart(df: pd.DataFrame) -> None:
-    """Render horizontal bar chart of top merchants by spend."""
-    merchant_df = get_top_merchants(df, n=8)
+def _pie_cat_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Build the same category DataFrame used by render_pie_chart (with אחר merging)."""
+    cat_df = get_category_breakdown(df)
+    total = cat_df["total"].sum()
+    threshold = total * 0.02
+    small = cat_df[cat_df["total"] < threshold]
+    if not small.empty:
+        other_row = {"category": "אחר", "total": small["total"].sum(), "count": small["count"].sum()}
+        cat_df = pd.concat(
+            [cat_df[cat_df["total"] >= threshold], pd.DataFrame([other_row])],
+            ignore_index=True,
+        ).sort_values("total", ascending=False).reset_index(drop=True)
+    return cat_df
+
+
+def get_category_color_map(cat_df: pd.DataFrame) -> dict[str, str]:
+    """Return the category → hex color mapping matching the pie chart's assignment.
+
+    px.pie with color_discrete_sequence assigns CHART_COLORS[i] to the category
+    at row i of the dataframe (first-occurrence order). We replicate that here,
+    preserving the "אחר" slot so subsequent color indices stay in sync.
+    """
+    return {
+        row["category"]: CHART_COLORS[i % len(CHART_COLORS)]
+        for i, row in cat_df.iterrows()
+        if row["category"] != "אחר"
+    }
+
+
+def _inject_chip_colors(color_map: dict[str, str]) -> None:
+    """Inject JS that applies pie-chart colors to chip buttons by matching button text.
+
+    Uses MutationObserver on the parent document so it works even when buttons
+    haven't fully rendered yet at script execution time. Guards against stacking
+    multiple observers by only re-injecting when the color map actually changes.
+    """
+    import hashlib
+    color_hash = hashlib.md5(json.dumps(color_map, sort_keys=True).encode()).hexdigest()
+    if st.session_state.get("_chip_colors_hash") == color_hash:
+        return
+    st.session_state["_chip_colors_hash"] = color_hash
+
+    colors_json = json.dumps(color_map)
+    script = f"""
+    <script>
+    (function() {{
+        const colors = {colors_json};
+
+        function applyColors() {{
+            try {{
+                const doc = window.parent.document;
+                doc.querySelectorAll('button').forEach(btn => {{
+                    // Get raw text from <p> child or button itself
+                    const rawText = (btn.querySelector('p') || btn).textContent.trim();
+                    const isActive = rawText.startsWith('\\u2713');  // ✓
+                    const label   = rawText.replace(/^\\u2713\\s*/, '').trim();
+                    const color   = colors[label];
+                    if (!color) return;
+                    btn.style.setProperty('background',    isActive ? color : color + '28', 'important');
+                    btn.style.setProperty('border-color',  color, 'important');
+                    btn.style.setProperty('color',         isActive ? '#ffffff' : color, 'important');
+                    btn.style.setProperty('border-radius', '20px', 'important');
+                    btn.style.setProperty('font-weight',   '600', 'important');
+                }});
+            }} catch(e) {{}}
+        }}
+
+        // Fire immediately and on a schedule
+        [0, 100, 300, 700, 1500].forEach(t => setTimeout(applyColors, t));
+
+        // Also re-apply on every DOM mutation (Streamlit React re-renders buttons)
+        try {{
+            const obs = new MutationObserver(applyColors);
+            obs.observe(window.parent.document.body, {{childList: true, subtree: true}});
+            setTimeout(() => obs.disconnect(), 10000);
+        }} catch(e) {{}}
+    }})();
+    </script>
+    """
+    components.html(script, height=0, scrolling=False)
+
+
+def render_category_chips(cats: list[str], active_cat: str | None) -> None:
+    """Render clickable category filter chips. Clicking a chip sets/clears the filter."""
+    n_cols = min(len(cats), 5)
+    for row_start in range(0, len(cats), n_cols):
+        row_cats = cats[row_start: row_start + n_cols]
+        cols = st.columns(len(row_cats))
+        for i, cat in enumerate(row_cats):
+            is_active = (cat == active_cat)
+            if cols[i].button(
+                f"✓ {cat}" if is_active else cat,
+                key=f"chip_{cat}",
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state["chart_filter_cat"] = None if is_active else cat
+                st.rerun()
+
+
+def render_merchants_chart(df: pd.DataFrame, active_cat: str | None = None) -> None:
+    """Render horizontal bar chart of top merchants by spend.
+
+    If active_cat is set, filters merchants to that category only.
+    """
+    df_src = df[df["category"] == active_cat] if active_cat else df
+    merchant_df = get_top_merchants(df_src, n=8)
+    title = f"ספקים — {active_cat}" if active_cat else "ספקים מובילים"
     fig = go.Figure(go.Bar(
         x=merchant_df["total"],
         y=merchant_df["merchant"],
@@ -344,7 +499,7 @@ def render_merchants_chart(df: pd.DataFrame) -> None:
         insidetextanchor="end",
         textfont=dict(color="#ffffff", size=15),
     ))
-    fig = _dark_layout(fig, "ספקים מובילים")
+    fig = _dark_layout(fig, title)
     fig.update_layout(
         height=440,
         xaxis=dict(visible=False),
@@ -356,41 +511,89 @@ def render_merchants_chart(df: pd.DataFrame) -> None:
 
 
 def render_anomalies(df: pd.DataFrame) -> None:
-    """Render the insights and anomalies alert cards."""
-    anomalies = get_anomalies(df)
-    if not anomalies:
-        st.caption("לא זוהו חריגות בתקופה הנבחרת.")
+    """Render recurring expenses, one-time purchases, and anomaly alerts."""
+    insights = get_insights(df)
+    recurring = insights["recurring"]
+    one_time  = insights["one_time"]
+    alerts    = insights["alerts"]
+
+    has_content = recurring or one_time or alerts
+    if not has_content:
+        st.caption("לא זוהו תובנות בתקופה הנבחרת.")
         return
-    cards = '<div class="iw">'
-    for a in anomalies:
-        icon = "🚨" if a["severity"] == "high" else "⚠️"
-        cards += f'<div class="ic {a["severity"]}"><span>{icon}</span><span>{a["message"]}</span></div>'
-    cards += "</div>"
-    st.markdown(cards, unsafe_allow_html=True)
+
+    html = '<div class="iw">'
+
+    # ── Recurring expenses ──
+    if recurring:
+        html += '<div class="insight-sub">🔁 הוצאות קבועות</div>'
+        for r in recurring:
+            html += (
+                f'<div class="ic recurring">'
+                f'<span>🔁</span>'
+                f'<span><b>{r["merchant"]}</b> — ממוצע ₪{r["avg"]:,.0f} לחודש'
+                f' &nbsp;·&nbsp; {r["months"]} חודשים</span>'
+                f'</div>'
+            )
+
+    # ── One-time purchases ──
+    if one_time:
+        html += '<div class="insight-sub">⚡ הוצאות חד פעמיות</div>'
+        for o in one_time:
+            html += (
+                f'<div class="ic onetime">'
+                f'<span>⚡</span>'
+                f'<span><b>{o["merchant"]}</b> — ₪{o["amount"]:,.0f}'
+                f' &nbsp;·&nbsp; {o["category"]}</span>'
+                f'</div>'
+            )
+
+    # ── Alerts ──
+    if alerts:
+        html += '<div class="insight-sub">🚨 חריגות</div>'
+        for a in alerts:
+            icon = "🚨" if a["severity"] == "high" else "⚠️"
+            html += (
+                f'<div class="ic {a["severity"]}">'
+                f'<span>{icon}</span><span>{a["message"]}</span>'
+                f'</div>'
+            )
+
+    html += '</div>'
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def render_transactions_table(df: pd.DataFrame) -> None:
     """Render the searchable, sortable full transactions table."""
     search = st.text_input("🔍 חיפוש לפי שם ספק", placeholder="לדוגמה: שופרסל, ארומה...")
 
-    display = df[["date", "merchant", "category", "amount"]].copy()
+    has_installments = "installment" in df.columns and df["installment"].astype(bool).any()
+    cols = ["date", "merchant", "category", "amount"]
+    if has_installments:
+        cols.append("installment")
+
+    display = df[cols].copy()
     display["date"] = display["date"].dt.strftime("%d/%m/%Y")
-    display = display.rename(columns={
+    rename_map = {
         "date":     "תאריך",
         "merchant": "בית עסק",
         "category": "קטגוריה",
         "amount":   "סכום (₪)",
-    })
+    }
+    if has_installments:
+        rename_map["installment"] = "תשלומים"
+    display = display.rename(columns=rename_map)
 
     if search:
         display = display[display["בית עסק"].str.contains(search, na=False)]
 
+    col_config: dict = {"סכום (₪)": st.column_config.NumberColumn(format="₪%.2f")}
     st.dataframe(
         display,
         use_container_width=True,
         hide_index=True,
         height=500,
-        column_config={"סכום (₪)": st.column_config.NumberColumn(format="₪%.2f")},
+        column_config=col_config,
     )
     st.caption(f"מציג {len(display):,} מתוך {len(df):,} עסקאות")
 
@@ -447,6 +650,12 @@ def _process_uploads(files: list) -> tuple[pd.DataFrame | None, list[str]]:
         .reset_index(drop=True)
     )
     return merged, errors
+
+
+def _reset_filters() -> None:
+    """Clear sidebar month and category filter selections."""
+    st.session_state.pop("filter_months", None)
+    st.session_state.pop("filter_cats", None)
 
 
 def _render_empty_state() -> None:
@@ -507,8 +716,7 @@ def main() -> None:
                 # Reset filters whenever the uploaded file set changes
                 uploaded_key = frozenset((f.name, f.size) for f in uploaded_files)
                 if st.session_state.get("uploaded_key") != uploaded_key:
-                    st.session_state.pop("filter_months", None)
-                    st.session_state.pop("filter_cats", None)
+                    _reset_filters()
                     st.session_state["uploaded_key"] = uploaded_key
                 st.session_state.df_all = df_parsed
                 st.session_state.data_source = "pdf"
@@ -520,8 +728,7 @@ def main() -> None:
             if st.button("🎲 נתוני הדגמה", use_container_width=True):
                 st.session_state.df_all = get_mock_data()
                 st.session_state.data_source = "demo"
-                st.session_state.pop("filter_months", None)
-                st.session_state.pop("filter_cats", None)
+                _reset_filters()
 
         # Clear button (visible only when data is present)
         if st.session_state.get("df_all") is not None:
@@ -608,20 +815,30 @@ def main() -> None:
         st.warning("אין נתונים תואמים לסינון הנבחר.")
         return
 
-    # ── KPIs ──────────────────────────────────────────────────────────────────────
-    render_kpis(compute_kpis(df))
-
     # ── Charts ────────────────────────────────────────────────────────────────────
     st.markdown('<div class="sec">ניתוח הוצאות</div>', unsafe_allow_html=True)
+    active_cat: str | None = st.session_state.get("chart_filter_cat")
+    pie_cat_df = _pie_cat_df(df)          # compute once — shared by chart + color map
+    cat_color_map = get_category_color_map(pie_cat_df)
     col_pie, col_bar = st.columns(2, gap="medium")
     with col_pie:
-        render_pie_chart(df)
+        render_pie_chart(df, active_cat=active_cat, cat_df=pie_cat_df)
     with col_bar:
-        render_merchants_chart(df)
+        render_merchants_chart(df, active_cat=active_cat)
+
+    cats = sorted(df["category"].unique().tolist())
+    render_category_chips(cats, active_cat)
+    _inject_chip_colors(cat_color_map)
+
+    # ── Apply chart category filter ───────────────────────────────────────────────
+    df_view = df[df["category"] == active_cat].copy() if active_cat else df
+
+    # ── KPIs ──────────────────────────────────────────────────────────────────────
+    render_kpis(compute_kpis(df_view))
 
     # ── Category Summary ──────────────────────────────────────────────────────────
     st.markdown('<div class="sec">סיכום קטגוריות</div>', unsafe_allow_html=True)
-    cat_summary = get_category_breakdown(df).copy()
+    cat_summary = get_category_breakdown(df_view).copy()
     cat_summary.columns = ["קטגוריה", 'סה"כ (₪)', "עסקאות"]
     st.dataframe(
         cat_summary,
@@ -632,11 +849,11 @@ def main() -> None:
 
     # ── Anomalies ─────────────────────────────────────────────────────────────────
     st.markdown('<div class="sec">תובנות וחריגים</div>', unsafe_allow_html=True)
-    render_anomalies(df)
+    render_anomalies(df_view)
 
     # ── Full Transactions Table ───────────────────────────────────────────────────
     st.markdown('<div class="sec">כל העסקאות</div>', unsafe_allow_html=True)
-    render_transactions_table(df)
+    render_transactions_table(df_view)
 
 
 if __name__ == "__main__":

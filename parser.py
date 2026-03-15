@@ -40,6 +40,9 @@ _TXN_RE = re.compile(
 # Matches the section between the foreign-currency flag (אל) and the date
 _MIDDLE_RE = re.compile(r'אל\s+(.*?)(\d{2}/\d{2}/\d{4})\s*$')
 
+# Captures installment detail from Cal lines: "6 מ- 10 תשלום" → groups (6, 10) → "6/10"
+_CAL_INSTALLMENT_RE = re.compile(r'(\d+)\s*-\s*מ\s*(\d+)\s*םולשת')
+
 # Patterns to strip from the middle section (payment details column)
 _PAYMENT_STRIP_RE = re.compile(
     r'\d+\s*-\s*מ\s*\d+\s*םולשת'  # installment: "6 מ- 10 תשלום"
@@ -69,7 +72,7 @@ CATEGORY_MAP: dict[str, str] = {
 }
 
 # Required output columns (order matters for downstream use)
-REQUIRED_COLUMNS: list[str] = ['date', 'merchant', 'amount', 'category']
+REQUIRED_COLUMNS: list[str] = ['date', 'merchant', 'amount', 'category', 'installment']
 
 # ── Isracard constants ─────────────────────────────────────────────────────────
 #
@@ -99,6 +102,15 @@ _IC_CATEGORY_MAP: dict[str, str] = {
     'תיב ילכ':     'ריהוט ובית',
     'השבלה':        'קניות ואופנה',
 }
+
+# Captures installment prefix from Isracard local lines:
+# "4 ךותמ 3 םולשת" → group1=4 (total), group2=3 (current) → "3/4"
+_IC_INSTALLMENT_RE = re.compile(r'(\d+)\s+ךותמ\s+(\d+)\s+םולשת')
+
+
+def _fmt_installment(m: re.Match | None) -> str:
+    """Format a regex match into 'current/total' installment string, or '' if no match."""
+    return f'{m.group(2)}/{m.group(1)}' if m else ''
 
 # Card-type / payment-mode tokens to strip from the middle section
 _IC_STRIP_RE = re.compile(
@@ -242,14 +254,19 @@ def _parse_line(line: str) -> dict[str, Any] | None:
         return None
     middle = mid_m.group(1).strip()
 
+    # Extract installment info before stripping
+    # Raw: "10 -מ 8 םולשת" → group1=10 (total), group2=8 (current) → display "8/10"
+    installment = _fmt_installment(_CAL_INSTALLMENT_RE.search(middle))
+
     category, merchant_raw = _extract_category_and_merchant(middle)
     merchant = fix_rtl(merchant_raw).strip(' -"')
 
     return {
-        'date':     pd.to_datetime(date_str, format='%d/%m/%Y'),
-        'merchant': merchant if merchant else 'לא ידוע',
-        'amount':   amount,
-        'category': category,
+        'date':        pd.to_datetime(date_str, format='%d/%m/%Y'),
+        'merchant':    merchant if merchant else 'לא ידוע',
+        'amount':      amount,
+        'category':    category,
+        'installment': installment,
     }
 
 
@@ -332,6 +349,9 @@ def _parse_isracard_from_lines(lines: list[str]) -> pd.DataFrame:
 
         # ── Local transactions ──
         if section == 'local':
+            # Extract installment prefix before main regex (it's skipped by re.search)
+            installment = _fmt_installment(_IC_INSTALLMENT_RE.search(line))
+
             m = _IC_LOCAL_RE.search(line)
             if not m:
                 continue
@@ -345,10 +365,11 @@ def _parse_isracard_from_lines(lines: list[str]) -> pd.DataFrame:
             if 'משיכת מזומנים' in merchant:
                 category = 'משיכת מזומנים'
             rows.append({
-                'date':     _parse_date_isracard(date_str),
-                'merchant': merchant or 'לא ידוע',
-                'amount':   amount,
-                'category': category,
+                'date':        _parse_date_isracard(date_str),
+                'merchant':    merchant or 'לא ידוע',
+                'amount':      amount,
+                'category':    category,
+                'installment': installment,
             })
 
         # ── Foreign transactions ──
@@ -361,10 +382,11 @@ def _parse_isracard_from_lines(lines: list[str]) -> pd.DataFrame:
             if amount <= 0:
                 continue
             rows.append({
-                'date':     _parse_date_isracard(date_str),
-                'merchant': _fix_latin_merchant(merchant_raw),
-                'amount':   amount,
-                'category': 'רכישות חו"ל',
+                'date':        _parse_date_isracard(date_str),
+                'merchant':    _fix_latin_merchant(merchant_raw),
+                'amount':      amount,
+                'category':    'רכישות חו"ל',
+                'installment': '',
             })
 
     if not rows:
@@ -478,10 +500,11 @@ def _parse_via_claude(source: Path | BytesIO) -> pd.DataFrame:
     for rec in records:
         try:
             rows.append({
-                'date':     pd.to_datetime(rec['date'], format='%d/%m/%Y'),
-                'merchant': str(rec.get('merchant', 'לא ידוע')).strip(),
-                'amount':   float(rec['amount']),
-                'category': str(rec.get('category', 'שונות')).strip(),
+                'date':        pd.to_datetime(rec['date'], format='%d/%m/%Y'),
+                'merchant':    str(rec.get('merchant', 'לא ידוע')).strip(),
+                'amount':      float(rec['amount']),
+                'category':    str(rec.get('category', 'שונות')).strip(),
+                'installment': '',
             })
         except (KeyError, ValueError):
             continue  # skip malformed records
