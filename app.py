@@ -1,0 +1,420 @@
+"""
+app.py — Streamlit UI for the Credit Card Dashboard.
+
+Layout, widgets, and rendering only.
+All business logic is delegated to analytics.py.
+"""
+
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
+
+from analytics import (
+    get_mock_data,
+    compute_kpis,
+    get_category_breakdown,
+    get_top_merchants,
+    get_anomalies,
+)
+
+# ── Chart Theme ──────────────────────────────────────────────────────────────────
+
+CHART_COLORS: list[str] = [
+    "#f2a900", "#3b82f6", "#10b981", "#f43f5e",
+    "#8b5cf6", "#fb923c", "#06b6d4", "#84cc16",
+]
+
+PLOTLY_PAPER_BG = "#070c18"
+PLOTLY_PLOT_BG  = "#0a0f1e"
+PLOTLY_GRID     = "#1c2d4a"
+PLOTLY_TEXT     = "#7a93b8"
+PLOTLY_TITLE    = "#e2e8f4"
+
+HEBREW_MONTHS: dict[int, str] = {
+    1: "ינואר",  2: "פברואר", 3: "מרץ",     4: "אפריל",
+    5: "מאי",    6: "יוני",   7: "יולי",    8: "אוגוסט",
+    9: "ספטמבר", 10: "אוקטובר", 11: "נובמבר", 12: "דצמבר",
+}
+
+# ── CSS ──────────────────────────────────────────────────────────────────────────
+
+_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+    --bg:           #070c18;
+    --bg-card:      #0d1422;
+    --border:       #1c2d4a;
+    --border-hi:    #243550;
+    --accent:       #f2a900;
+    --accent-dim:   rgba(242,169,0,0.12);
+    --blue:         #3b82f6;
+    --green:        #10b981;
+    --red:          #f43f5e;
+    --warn:         #f59e0b;
+    --tx:           #e2e8f4;
+    --tx2:          #7a93b8;
+    --tx3:          #3d5270;
+}
+
+/* ── Global ── */
+html, body, .stApp {
+    background: var(--bg) !important;
+    font-family: 'Heebo', sans-serif !important;
+    color: var(--tx) !important;
+}
+.main .block-container {
+    padding: 1.5rem 2rem 4rem !important;
+    max-width: 1400px !important;
+    direction: rtl;
+}
+
+/* ── Sidebar ── */
+section[data-testid="stSidebar"] {
+    background: var(--bg-card) !important;
+    border-left: 1px solid var(--border) !important;
+}
+section[data-testid="stSidebar"] * { direction: rtl; }
+section[data-testid="stSidebar"] label {
+    font-size: 0.7rem !important;
+    font-weight: 700 !important;
+    color: var(--tx2) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+}
+
+/* ── Header ── */
+.hdr        { padding: 1.5rem 0 1.2rem; border-bottom: 1px solid var(--border); margin-bottom: 1.5rem; }
+.hdr-title  { font-size: 2rem; font-weight: 800; color: var(--tx); letter-spacing: -0.02em; margin: 0 0 0.25rem; }
+.hdr-title span { color: var(--accent); }
+.hdr-sub    { font-size: 0.83rem; color: var(--tx2); margin: 0; }
+
+/* ── KPI Row ── */
+.kpi-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-bottom: 0.25rem;
+}
+.kpi {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.3rem 1.5rem 1.1rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color .2s;
+}
+.kpi:hover { border-color: var(--border-hi); }
+.kpi::after {
+    content: ''; position: absolute;
+    top: 0; right: 0;
+    width: 4px; height: 100%;
+    border-radius: 0 10px 10px 0;
+}
+.kpi.g::after { background: var(--accent); }
+.kpi.b::after { background: var(--blue); }
+.kpi.e::after { background: var(--green); }
+.kpi-ico  { font-size: 1.3rem; opacity: 0.18; position: absolute; left: 1.2rem; top: 1.1rem; }
+.kpi-lbl  { font-size: 0.67rem; font-weight: 700; color: var(--tx2); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.45rem; }
+.kpi-val  { font-family: 'IBM Plex Mono', monospace; font-size: 1.9rem; font-weight: 500; color: var(--tx); direction: ltr; text-align: right; line-height: 1; }
+.kpi-val small { font-size: 1rem; color: var(--tx2); }
+.kpi-hint { font-size: 0.7rem; color: var(--tx3); margin-top: 0.3rem; }
+
+/* ── Section Dividers ── */
+.sec {
+    font-size: 0.68rem; font-weight: 700; color: var(--tx2);
+    text-transform: uppercase; letter-spacing: 0.12em;
+    margin: 1.6rem 0 0.8rem;
+    display: flex; align-items: center; gap: 0.5rem;
+}
+.sec::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+/* ── Insights ── */
+.iw { display: flex; flex-direction: column; gap: 0.5rem; }
+.ic {
+    display: flex; align-items: flex-start; gap: 0.7rem;
+    padding: 0.8rem 1.1rem; border-radius: 8px;
+    font-size: 0.84rem; line-height: 1.55;
+    border-right: 3px solid;
+}
+.ic.high   { background: rgba(244,63,94,.07);   border-color: var(--red);  color: #fca5a5; }
+.ic.medium { background: rgba(245,158,11,.07); border-color: var(--warn); color: #fcd34d; }
+
+/* ── Search Input ── */
+.stTextInput input {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    color: var(--tx) !important;
+    direction: rtl;
+    padding: 0.55rem 0.9rem !important;
+}
+.stTextInput input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px var(--accent-dim) !important;
+}
+.stTextInput label { color: var(--tx2) !important; font-size: 0.75rem !important; }
+
+/* ── Misc ── */
+hr { border-color: var(--border) !important; margin: 1.2rem 0 !important; }
+::-webkit-scrollbar            { width: 5px; height: 5px; }
+::-webkit-scrollbar-track      { background: var(--bg); }
+::-webkit-scrollbar-thumb      { background: var(--border-hi); border-radius: 3px; }
+"""
+
+
+def inject_css() -> None:
+    """Inject global dark RTL CSS into the Streamlit page."""
+    st.markdown(f"<style>{_CSS}</style>", unsafe_allow_html=True)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────────
+
+def _period_to_hebrew(period_str: str) -> str:
+    """Convert 'YYYY-MM' string to a Hebrew month label (e.g. 'נובמבר 2025')."""
+    p = pd.Period(period_str)
+    return f"{HEBREW_MONTHS.get(p.month, str(p.month))} {p.year}"
+
+
+def _dark_layout(fig: go.Figure, title: str = "") -> go.Figure:
+    """Apply the project's dark Plotly theme to a figure."""
+    fig.update_layout(
+        title=dict(
+            text=title,
+            font=dict(color=PLOTLY_TITLE, size=13, family="Heebo"),
+            x=1, xanchor="right",
+        ),
+        paper_bgcolor=PLOTLY_PAPER_BG,
+        plot_bgcolor=PLOTLY_PLOT_BG,
+        font=dict(color=PLOTLY_TEXT, family="Heebo"),
+        margin=dict(t=45, b=10, l=10, r=10),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=PLOTLY_TEXT)),
+        xaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID),
+        yaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID),
+    )
+    return fig
+
+
+# ── Render Components ────────────────────────────────────────────────────────────
+
+def render_kpis(kpis: dict) -> None:
+    """Render the three KPI metric cards as custom HTML."""
+    total = kpis["total_spend"]
+    avg   = kpis["monthly_avg"]
+    count = kpis["transaction_count"]
+    st.markdown(f"""
+    <div class="kpi-row">
+      <div class="kpi g">
+        <div class="kpi-ico">💰</div>
+        <div class="kpi-lbl">סה"כ הוצאות</div>
+        <div class="kpi-val"><small>₪</small>{total:,.0f}</div>
+        <div class="kpi-hint">בתקופה הנבחרת</div>
+      </div>
+      <div class="kpi b">
+        <div class="kpi-ico">📅</div>
+        <div class="kpi-lbl">ממוצע חודשי</div>
+        <div class="kpi-val"><small>₪</small>{avg:,.0f}</div>
+        <div class="kpi-hint">לחודש</div>
+      </div>
+      <div class="kpi e">
+        <div class="kpi-ico">🧾</div>
+        <div class="kpi-lbl">עסקאות</div>
+        <div class="kpi-val">{count:,}</div>
+        <div class="kpi-hint">עסקאות בסה"כ</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_pie_chart(df: pd.DataFrame) -> None:
+    """Render interactive donut pie chart of spending by category."""
+    cat_df = get_category_breakdown(df)
+    fig = px.pie(
+        cat_df,
+        values="total",
+        names="category",
+        color_discrete_sequence=CHART_COLORS,
+        hole=0.52,
+    )
+    fig.update_traces(
+        textposition="outside",
+        textinfo="label+percent",
+        hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
+        textfont_size=10,
+    )
+    fig = _dark_layout(fig, "לפי קטגוריה")
+    fig.update_layout(
+        showlegend=False,
+        height=370,
+        annotations=[dict(
+            text=f"₪{df['amount'].sum():,.0f}",
+            x=0.5, y=0.5,
+            font=dict(size=15, color=PLOTLY_TITLE, family="IBM Plex Mono"),
+            showarrow=False,
+        )],
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_merchants_chart(df: pd.DataFrame) -> None:
+    """Render horizontal bar chart of top merchants by spend."""
+    merchant_df = get_top_merchants(df, n=8)
+    fig = go.Figure(go.Bar(
+        x=merchant_df["total"],
+        y=merchant_df["merchant"],
+        orientation="h",
+        marker=dict(color=CHART_COLORS[0], opacity=0.82, line=dict(width=0)),
+        hovertemplate="<b>%{y}</b><br>₪%{x:,.0f}<extra></extra>",
+        text=[f"₪{v:,.0f}" for v in merchant_df["total"]],
+        textposition="outside",
+        textfont=dict(color=PLOTLY_TITLE, size=10),
+    ))
+    fig = _dark_layout(fig, "ספקים מובילים")
+    fig.update_layout(
+        height=370,
+        xaxis=dict(visible=False),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+        bargap=0.35,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_anomalies(df: pd.DataFrame) -> None:
+    """Render the insights and anomalies alert cards."""
+    anomalies = get_anomalies(df)
+    if not anomalies:
+        st.caption("לא זוהו חריגות בתקופה הנבחרת.")
+        return
+    cards = '<div class="iw">'
+    for a in anomalies:
+        icon = "🚨" if a["severity"] == "high" else "⚠️"
+        cards += f'<div class="ic {a["severity"]}"><span>{icon}</span><span>{a["message"]}</span></div>'
+    cards += "</div>"
+    st.markdown(cards, unsafe_allow_html=True)
+
+
+def render_transactions_table(df: pd.DataFrame) -> None:
+    """Render the searchable, sortable full transactions table."""
+    search = st.text_input("🔍 חיפוש לפי שם ספק", placeholder="לדוגמה: שופרסל, ארומה...")
+
+    display = df[["date", "merchant", "category", "amount"]].copy()
+    display["date"] = display["date"].dt.strftime("%d/%m/%Y")
+    display = display.rename(columns={
+        "date":     "תאריך",
+        "merchant": "בית עסק",
+        "category": "קטגוריה",
+        "amount":   "סכום (₪)",
+    })
+
+    if search:
+        display = display[display["בית עסק"].str.contains(search, na=False)]
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True,
+        height=420,
+        column_config={"סכום (₪)": st.column_config.NumberColumn(format="₪%.2f")},
+    )
+    st.caption(f"מציג {len(display):,} מתוך {len(df):,} עסקאות")
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    """Entry point — configures page and orchestrates all dashboard sections."""
+    st.set_page_config(
+        page_title="דשבורד הוצאות | כרטיס אשראי",
+        page_icon="💳",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    inject_css()
+
+    # Load once, cache in session state to avoid re-generating on every interaction
+    if "df_all" not in st.session_state:
+        st.session_state.df_all = get_mock_data()
+    df_all: pd.DataFrame = st.session_state.df_all
+
+    # ── Sidebar filters ──
+    with st.sidebar:
+        st.markdown("### 💳 סינון נתונים")
+        st.divider()
+
+        all_periods = sorted(
+            df_all["date"].dt.to_period("M").unique().astype(str).tolist(),
+            reverse=True,
+        )
+        selected_months = st.multiselect(
+            "חודשים",
+            options=all_periods,
+            default=all_periods,
+            format_func=_period_to_hebrew,
+        )
+        st.divider()
+
+        all_cats = sorted(df_all["category"].unique().tolist())
+        selected_cats = st.multiselect(
+            "קטגוריות",
+            options=all_cats,
+            default=all_cats,
+        )
+        st.divider()
+        st.caption(f"📊 סה\"כ {len(df_all):,} עסקאות בנתוני ההדגמה")
+        st.caption("🔒 קבצי PDF לא מועלים ל-GitHub")
+
+    # ── Apply filters ──
+    if selected_months and selected_cats:
+        month_mask = df_all["date"].dt.to_period("M").astype(str).isin(selected_months)
+        cat_mask   = df_all["category"].isin(selected_cats)
+        df = df_all[month_mask & cat_mask].copy()
+    else:
+        df = df_all.copy()
+
+    # ── Header ──
+    st.markdown("""
+    <div class="hdr">
+      <div class="hdr-title">דשבורד <span>הוצאות אשראי</span></div>
+      <div class="hdr-sub">ניתוח חכם של פירוט כרטיס אשראי — נתוני הדגמה</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if df.empty:
+        st.warning("אין נתונים תואמים לסינון הנבחר.")
+        return
+
+    # ── KPIs ──
+    render_kpis(compute_kpis(df))
+
+    # ── Charts (pie + bar side by side) ──
+    st.markdown('<div class="sec">ניתוח הוצאות</div>', unsafe_allow_html=True)
+    col_pie, col_bar = st.columns(2, gap="medium")
+    with col_pie:
+        render_pie_chart(df)
+    with col_bar:
+        render_merchants_chart(df)
+
+    # ── Category Summary Table ──
+    st.markdown('<div class="sec">סיכום קטגוריות</div>', unsafe_allow_html=True)
+    cat_summary = get_category_breakdown(df).copy()
+    cat_summary.columns = ["קטגוריה", 'סה"כ (₪)', "עסקאות"]
+    st.dataframe(
+        cat_summary,
+        use_container_width=True,
+        hide_index=True,
+        column_config={'סה"כ (₪)': st.column_config.NumberColumn(format="₪%.2f")},
+    )
+
+    # ── Anomalies ──
+    st.markdown('<div class="sec">תובנות וחריגים</div>', unsafe_allow_html=True)
+    render_anomalies(df)
+
+    # ── Full Transactions Table ──
+    st.markdown('<div class="sec">כל העסקאות</div>', unsafe_allow_html=True)
+    render_transactions_table(df)
+
+
+if __name__ == "__main__":
+    main()
