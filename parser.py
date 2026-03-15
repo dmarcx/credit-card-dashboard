@@ -4,21 +4,17 @@ parser.py — PDF ingestion and transaction extraction.
 Parsing paths (tried in order):
   1. Cal card regex parser  — pdfplumber + column-aware regex (₪-anchored lines).
   2. Isracard regex parser  — section-aware regex for ישראכרט PDF format.
-  3. Claude API fallback    — sends raw text to claude-sonnet-4-6 for JSON extraction.
 
 Both Cal and Isracard PDFs store Hebrew text in visual (left-to-right) order,
 which reverses both the character order within each word and the word order
 on each line. The fix_rtl() helper corrects both issues.
 """
 
-import json
-import os
 import re
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import anthropic
 import pandas as pd
 import pdfplumber
 
@@ -411,112 +407,6 @@ def _extract_lines(source: Path | BytesIO) -> list[str]:
     return lines
 
 
-def _extract_full_text(source: Path | BytesIO) -> str:
-    """Extract all text from a PDF as a single string (for Claude API fallback)."""
-    parts: list[str] = []
-    # Reset buffer position if BytesIO was already read
-    if isinstance(source, BytesIO):
-        source.seek(0)
-    with pdfplumber.open(source) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ''
-            if text.strip():
-                parts.append(text)
-    return '\n'.join(parts)
-
-
-_CLAUDE_EXTRACTION_PROMPT = """\
-להלן טקסט גולמי שחולץ מקובץ PDF של פירוט כרטיס אשראי (ישראכרט, כאל, ויזה, או אחר).
-חלץ את כל העסקאות מהטקסט והחזר JSON בלבד — מערך של אובייקטים, כל אחד עם השדות:
-  "date"     — תאריך בפורמט DD/MM/YYYY
-  "merchant" — שם בית העסק בעברית
-  "amount"   — סכום החיוב כמספר עשרוני (חיובי)
-  "category" — קטגוריה בעברית, אחת מ: מזון ומשקאות, סופרמרקט, קניות ואופנה,
-               דלק ותחבורה, בילוי ופנאי, בריאות ורפואה, תקשורת, ריהוט ובית,
-               מוצרי חשמל, ביטוח ופיננסים, טיפוח ויופי, שונות
-
-כללים:
-- כלול רק חיובים ממשיים (לא עמלות, לא הפניות לדפים אחרים).
-- אם הסכום מופיע בשקלים — השתמש בו ישירות.
-- אם שם העסק מופיע הפוך (ויזואלית) — תקן אותו לקריא.
-- החזר JSON בלבד, ללא טקסט נוסף.
-
-טקסט ה-PDF:
-"""
-
-
-def _parse_via_claude(source: Path | BytesIO) -> pd.DataFrame:
-    """
-    Fallback: use Claude API to extract transactions from unrecognised PDF formats.
-
-    Args:
-        source: Path or BytesIO of the PDF file.
-
-    Returns:
-        Normalised transactions DataFrame.
-
-    Raises:
-        ValueError: If the API key is missing, or Claude returns no valid transactions.
-    """
-    api_key = os.environ.get('ANTHROPIC_API_KEY')
-    if not api_key:
-        try:
-            import streamlit as st
-            api_key = st.secrets.get('ANTHROPIC_API_KEY')
-        except Exception:
-            pass
-    if not api_key:
-        raise ValueError(
-            'לא נמצא מפתח ANTHROPIC_API_KEY. '
-            'הגדר אותו ב-.streamlit/secrets.toml או כמשתנה סביבתי.'
-        )
-
-    raw_text = _extract_full_text(source)
-    if not raw_text.strip():
-        raise ValueError('לא ניתן לחלץ טקסט מהקובץ.')
-
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model='claude-sonnet-4-6',
-        max_tokens=4096,
-        messages=[{'role': 'user', 'content': _CLAUDE_EXTRACTION_PROMPT + raw_text}],
-    )
-
-    response_text = message.content[0].text.strip()
-    # Strip markdown code fences if present
-    if response_text.startswith('```'):
-        response_text = re.sub(r'^```[a-z]*\n?', '', response_text)
-        response_text = re.sub(r'\n?```$', '', response_text)
-
-    try:
-        records = json.loads(response_text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f'Claude החזיר תגובה לא תקינה: {exc}') from exc
-
-    if not records:
-        raise ValueError('Claude לא הצליח לחלץ עסקאות מהקובץ.')
-
-    rows: list[dict] = []
-    for rec in records:
-        try:
-            rows.append({
-                'date':        pd.to_datetime(rec['date'], format='%d/%m/%Y'),
-                'merchant':    str(rec.get('merchant', 'לא ידוע')).strip(),
-                'amount':      float(rec['amount']),
-                'category':    str(rec.get('category', 'שונות')).strip(),
-                'installment': '',
-            })
-        except (KeyError, ValueError):
-            continue  # skip malformed records
-
-    if not rows:
-        raise ValueError('לא נמצאו עסקאות תקינות בתגובת Claude.')
-
-    return (
-        pd.DataFrame(rows)[REQUIRED_COLUMNS]
-        .sort_values('date')
-        .reset_index(drop=True)
-    )
 
 
 def parse_pdf(source: Path | BytesIO) -> pd.DataFrame:
@@ -559,5 +449,7 @@ def parse_pdf(source: Path | BytesIO) -> pd.DataFrame:
             .reset_index(drop=True)
         )
 
-    # ── Path 3: Claude API fallback ──
-    return _parse_via_claude(source)
+    raise ValueError(
+        'לא ניתן לזהות את פורמט הקובץ. '
+        'האפליקציה תומכת בקבצי PDF של כאל וישראכרט בלבד.'
+    )
