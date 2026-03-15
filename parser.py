@@ -341,6 +341,9 @@ def _parse_isracard_from_lines(lines: list[str]) -> pd.DataFrame:
                 continue
             category, merchant_raw = _ic_extract_category_and_merchant(middle)
             merchant = fix_rtl(merchant_raw).strip(' -"\'')
+            # Override category for cash withdrawals
+            if 'משיכת מזומנים' in merchant:
+                category = 'משיכת מזומנים'
             rows.append({
                 'date':     _parse_date_isracard(date_str),
                 'merchant': merchant or 'לא ידוע',
@@ -361,7 +364,7 @@ def _parse_isracard_from_lines(lines: list[str]) -> pd.DataFrame:
                 'date':     _parse_date_isracard(date_str),
                 'merchant': _fix_latin_merchant(merchant_raw),
                 'amount':   amount,
-                'category': 'שונות',
+                'category': 'רכישות חו"ל',
             })
 
     if not rows:
