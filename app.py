@@ -80,18 +80,18 @@ section[data-testid="stSidebar"] {
 }
 section[data-testid="stSidebar"] * { direction: rtl; }
 section[data-testid="stSidebar"] label {
-    font-size: 0.7rem !important;
+    font-size: 0.85rem !important;
     font-weight: 700 !important;
     color: var(--tx2) !important;
     text-transform: uppercase;
-    letter-spacing: 0.09em;
+    letter-spacing: 0.07em;
 }
 
 /* ── Header ── */
 .hdr        { padding: 1.5rem 0 1.2rem; border-bottom: 1px solid var(--border); margin-bottom: 1.5rem; }
-.hdr-title  { font-size: 2rem; font-weight: 800; color: var(--tx); letter-spacing: -0.02em; margin: 0 0 0.25rem; }
+.hdr-title  { font-size: 2.2rem; font-weight: 800; color: var(--tx); letter-spacing: -0.02em; margin: 0 0 0.25rem; }
 .hdr-title span { color: var(--accent); }
-.hdr-sub    { font-size: 0.83rem; color: var(--tx2); margin: 0; }
+.hdr-sub    { font-size: 1rem; color: var(--tx2); margin: 0; }
 
 /* ── KPI Row ── */
 .kpi-row {
@@ -104,7 +104,7 @@ section[data-testid="stSidebar"] label {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 1.3rem 1.5rem 1.1rem;
+    padding: 1.4rem 1.6rem 1.2rem;
     position: relative;
     overflow: hidden;
     transition: border-color .2s;
@@ -119,17 +119,17 @@ section[data-testid="stSidebar"] label {
 .kpi.g::after { background: var(--accent); }
 .kpi.b::after { background: var(--blue); }
 .kpi.e::after { background: var(--green); }
-.kpi-ico  { font-size: 1.3rem; opacity: 0.18; position: absolute; left: 1.2rem; top: 1.1rem; }
-.kpi-lbl  { font-size: 0.67rem; font-weight: 700; color: var(--tx2); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.45rem; }
-.kpi-val  { font-family: 'IBM Plex Mono', monospace; font-size: 1.9rem; font-weight: 500; color: var(--tx); direction: ltr; text-align: right; line-height: 1; }
-.kpi-val small { font-size: 1rem; color: var(--tx2); }
-.kpi-hint { font-size: 0.7rem; color: var(--tx3); margin-top: 0.3rem; }
+.kpi-ico  { font-size: 1.5rem; opacity: 0.18; position: absolute; left: 1.2rem; top: 1.2rem; }
+.kpi-lbl  { font-size: 0.82rem; font-weight: 700; color: var(--tx2); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.5rem; }
+.kpi-val  { font-family: 'IBM Plex Mono', monospace; font-size: 2.3rem; font-weight: 500; color: var(--tx); direction: ltr; text-align: right; line-height: 1; }
+.kpi-val small { font-size: 1.2rem; color: var(--tx2); }
+.kpi-hint { font-size: 0.82rem; color: var(--tx3); margin-top: 0.35rem; }
 
 /* ── Section Dividers ── */
 .sec {
-    font-size: 0.68rem; font-weight: 700; color: var(--tx2);
-    text-transform: uppercase; letter-spacing: 0.12em;
-    margin: 1.6rem 0 0.8rem;
+    font-size: 0.82rem; font-weight: 700; color: var(--tx2);
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin: 1.8rem 0 0.9rem;
     display: flex; align-items: center; gap: 0.5rem;
 }
 .sec::after { content: ''; flex: 1; height: 1px; background: var(--border); }
@@ -138,8 +138,8 @@ section[data-testid="stSidebar"] label {
 .iw { display: flex; flex-direction: column; gap: 0.5rem; }
 .ic {
     display: flex; align-items: flex-start; gap: 0.7rem;
-    padding: 0.8rem 1.1rem; border-radius: 8px;
-    font-size: 0.84rem; line-height: 1.55;
+    padding: 0.9rem 1.2rem; border-radius: 8px;
+    font-size: 0.97rem; line-height: 1.6;
     border-right: 3px solid;
 }
 .ic.high   { background: rgba(244,63,94,.07);   border-color: var(--red);  color: #fca5a5; }
@@ -152,13 +152,14 @@ section[data-testid="stSidebar"] label {
     border-radius: 8px !important;
     color: var(--tx) !important;
     direction: rtl;
-    padding: 0.55rem 0.9rem !important;
+    font-size: 1rem !important;
+    padding: 0.6rem 0.9rem !important;
 }
 .stTextInput input:focus {
     border-color: var(--accent) !important;
     box-shadow: 0 0 0 3px var(--accent-dim) !important;
 }
-.stTextInput label { color: var(--tx2) !important; font-size: 0.75rem !important; }
+.stTextInput label { color: var(--tx2) !important; font-size: 0.9rem !important; }
 
 /* ── Misc ── */
 hr { border-color: var(--border) !important; margin: 1.2rem 0 !important; }
@@ -186,16 +187,16 @@ def _dark_layout(fig: go.Figure, title: str = "") -> go.Figure:
     fig.update_layout(
         title=dict(
             text=title,
-            font=dict(color=PLOTLY_TITLE, size=13, family="Heebo"),
+            font=dict(color=PLOTLY_TITLE, size=16, family="Heebo"),
             x=1, xanchor="right",
         ),
         paper_bgcolor=PLOTLY_PAPER_BG,
         plot_bgcolor=PLOTLY_PLOT_BG,
-        font=dict(color=PLOTLY_TEXT, family="Heebo"),
-        margin=dict(t=45, b=10, l=10, r=10),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=PLOTLY_TEXT)),
-        xaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID),
-        yaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID),
+        font=dict(color=PLOTLY_TEXT, family="Heebo", size=14),
+        margin=dict(t=48, b=10, l=10, r=10),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=PLOTLY_TEXT, size=13)),
+        xaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID, tickfont=dict(size=13)),
+        yaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID, tickfont=dict(size=13)),
     )
     return fig
 
@@ -245,16 +246,16 @@ def render_pie_chart(df: pd.DataFrame) -> None:
         textposition="outside",
         textinfo="label+percent",
         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
-        textfont_size=10,
+        textfont_size=13,
     )
     fig = _dark_layout(fig, "לפי קטגוריה")
     fig.update_layout(
         showlegend=False,
-        height=370,
+        height=400,
         annotations=[dict(
             text=f"₪{df['amount'].sum():,.0f}",
             x=0.5, y=0.5,
-            font=dict(size=15, color=PLOTLY_TITLE, family="IBM Plex Mono"),
+            font=dict(size=18, color=PLOTLY_TITLE, family="IBM Plex Mono"),
             showarrow=False,
         )],
     )
@@ -272,13 +273,13 @@ def render_merchants_chart(df: pd.DataFrame) -> None:
         hovertemplate="<b>%{y}</b><br>₪%{x:,.0f}<extra></extra>",
         text=[f"₪{v:,.0f}" for v in merchant_df["total"]],
         textposition="outside",
-        textfont=dict(color=PLOTLY_TITLE, size=10),
+        textfont=dict(color=PLOTLY_TITLE, size=13),
     ))
     fig = _dark_layout(fig, "ספקים מובילים")
     fig.update_layout(
-        height=370,
+        height=400,
         xaxis=dict(visible=False),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=13)),
         bargap=0.35,
     )
     st.plotly_chart(fig, use_container_width=True)
