@@ -862,15 +862,46 @@ def main() -> None:
     subtitle = "נתוני הדגמה — העלה PDF לנתונים אמיתיים" if is_demo else "ניתוח פירוט כרטיס אשראי"
     logo_src = _logo_b64()
     logo_html = f'<div class="hdr-logo"><img src="{logo_src}" alt="MARCAI"/></div>' if logo_src else ""
-    st.markdown(f"""
-    <div class="hdr">
-      {logo_html}
-      <div class="hdr-text">
-        <div class="hdr-title">דשבורד <span>הוצאות אשראי</span></div>
-        <div class="hdr-sub">{subtitle}</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+
+    col_hdr, col_help = st.columns([10, 1])
+    with col_hdr:
+        st.markdown(f"""
+        <div class="hdr">
+          {logo_html}
+          <div class="hdr-text">
+            <div class="hdr-title">דשבורד <span>הוצאות אשראי</span></div>
+            <div class="hdr-sub">{subtitle}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_help:
+        st.markdown('<div style="padding-top:1.6rem"></div>', unsafe_allow_html=True)
+        with st.popover("❓", use_container_width=True):
+            st.markdown("#### הוראות שימוש")
+            st.markdown("""
+**העלאת קבצים**
+- לחץ על "Browse files" בתפריט הצד והעלה PDF אחד או יותר.
+- ניתן להעלות **כמה כרטיסים** (כאל + ישראכרט) ו**כמה חודשים** יחד — הנתונים יאוחדו אוטומטית.
+
+**סינון חודשים וקטגוריות**
+- לאחר הטעינה יופיעו מסנני חודשים וקטגוריות בתפריט הצד.
+- לחץ **"הכל"** לאיפוס הסינון.
+
+**גרפים אינטראקטיביים**
+- לחץ על **כפתורי הקטגוריות** מתחת לגרפים לסינון הדשבורד כולו לאותה קטגוריה.
+- לחץ שוב כדי לבטל.
+
+**תובנות**
+- 🔁 הוצאות קבועות — ספקים חוזרים
+- ⚡ חד פעמיות — רכישות גדולות חד פעמיות
+- 🚨 חריגות — עסקאות גבוהות מהממוצע
+
+**חיפוש עסקאות**
+- בתחתית הדף — חיפוש לפי שם ספק.
+
+---
+**כרטיסים נתמכים:** כאל · ישראכרט
+            """)
 
     if df.empty:
         st.warning("אין נתונים תואמים לסינון הנבחר.")
