@@ -187,16 +187,16 @@ def _dark_layout(fig: go.Figure, title: str = "") -> go.Figure:
     fig.update_layout(
         title=dict(
             text=title,
-            font=dict(color=PLOTLY_TITLE, size=16, family="Heebo"),
+            font=dict(color=PLOTLY_TITLE, size=18, family="Heebo"),
             x=1, xanchor="right",
         ),
         paper_bgcolor=PLOTLY_PAPER_BG,
         plot_bgcolor=PLOTLY_PLOT_BG,
-        font=dict(color=PLOTLY_TEXT, family="Heebo", size=14),
-        margin=dict(t=48, b=10, l=10, r=10),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=PLOTLY_TEXT, size=13)),
-        xaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID, tickfont=dict(size=13)),
-        yaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID, tickfont=dict(size=13)),
+        font=dict(color=PLOTLY_TEXT, family="Heebo", size=16),
+        margin=dict(t=52, b=10, l=10, r=90),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=PLOTLY_TEXT, size=15)),
+        xaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID, tickfont=dict(size=15)),
+        yaxis=dict(gridcolor=PLOTLY_GRID, color=PLOTLY_TEXT, linecolor=PLOTLY_GRID, tickfont=dict(size=15)),
     )
     return fig
 
@@ -246,16 +246,16 @@ def render_pie_chart(df: pd.DataFrame) -> None:
         textposition="outside",
         textinfo="label+percent",
         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
-        textfont_size=13,
+        textfont_size=15,
     )
     fig = _dark_layout(fig, "לפי קטגוריה")
     fig.update_layout(
         showlegend=False,
-        height=400,
+        height=440,
         annotations=[dict(
             text=f"₪{df['amount'].sum():,.0f}",
             x=0.5, y=0.5,
-            font=dict(size=18, color=PLOTLY_TITLE, family="IBM Plex Mono"),
+            font=dict(size=22, color=PLOTLY_TITLE, family="IBM Plex Mono"),
             showarrow=False,
         )],
     )
@@ -273,14 +273,15 @@ def render_merchants_chart(df: pd.DataFrame) -> None:
         hovertemplate="<b>%{y}</b><br>₪%{x:,.0f}<extra></extra>",
         text=[f"₪{v:,.0f}" for v in merchant_df["total"]],
         textposition="outside",
-        textfont=dict(color=PLOTLY_TITLE, size=13),
+        textfont=dict(color=PLOTLY_TITLE, size=15),
     ))
     fig = _dark_layout(fig, "ספקים מובילים")
     fig.update_layout(
-        height=400,
+        height=440,
         xaxis=dict(visible=False),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=13)),
-        bargap=0.35,
+        yaxis=dict(autorange="reversed", tickfont=dict(size=14)),
+        bargap=0.3,
+        margin=dict(t=52, b=10, l=10, r=110),
     )
     st.plotly_chart(fig, use_container_width=True)
 
