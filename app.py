@@ -23,6 +23,10 @@ from parser import parse_pdf
 
 # ── Theme palettes ───────────────────────────────────────────────────────────────
 
+# Months with fewer than this many transactions are treated as carry-over
+# artifacts and hidden from the month filter (but still present in the data).
+MIN_MONTH_TRANSACTIONS: int = 3
+
 CHART_COLORS: list[str] = [
     "#f2a900", "#3b82f6", "#10b981", "#f43f5e",
     "#8b5cf6", "#fb923c", "#06b6d4", "#84cc16",
@@ -386,16 +390,11 @@ def _process_uploads(files: list) -> tuple[pd.DataFrame | None, list[str]]:
     if not dfs:
         return None, errors
 
-    # Each PDF's statement month = the latest month found in its transactions.
-    # Keep only transactions that belong to that statement month so that
-    # historical carry-over rows from previous months are excluded.
-    filtered: list[pd.DataFrame] = []
-    for df in dfs:
-        statement_month = df["date"].dt.to_period("M").max()
-        filtered.append(df[df["date"].dt.to_period("M") == statement_month])
-
+    # Merge all PDFs without per-file date filtering.
+    # Carry-over rows (isolated old transactions) are suppressed in the UI by
+    # only showing months with >= MIN_MONTH_TRANSACTIONS in the filter list.
     merged = (
-        pd.concat(filtered, ignore_index=True)
+        pd.concat(dfs, ignore_index=True)
         .drop_duplicates(subset=["date", "merchant", "amount"])
         .sort_values("date")
         .reset_index(drop=True)
@@ -486,15 +485,16 @@ def main() -> None:
         if df_all is not None:
             st.divider()
 
+            month_counts = df_all["date"].dt.to_period("M").value_counts()
             all_periods = sorted(
-                df_all["date"].dt.to_period("M").unique().astype(str).tolist(),
+                [str(m) for m, n in month_counts.items() if n >= MIN_MONTH_TRANSACTIONS],
                 reverse=True,
             )
             # key= lets Streamlit persist selections across reruns via session_state.
             # We only set the initial value; after that Streamlit owns the key.
             if "filter_months" not in st.session_state:
-                # Default to the most recent month only so avg == total on first load
-                st.session_state["filter_months"] = [all_periods[0]]
+                # Default to all visible months (carry-overs already excluded above)
+                st.session_state["filter_months"] = all_periods
 
             col_mlbl, col_mall = st.columns([3, 1])
             col_mlbl.markdown("**חודשים**")
