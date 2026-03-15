@@ -1,19 +1,24 @@
 """
 parser.py — PDF ingestion and transaction extraction.
 
-Primary path: pdfplumber text extraction with column-aware regex parsing.
-Fallback: Claude API for structured extraction when direct parsing fails.
+Parsing paths (tried in order):
+  1. Cal card regex parser  — pdfplumber + column-aware regex (₪-anchored lines).
+  2. Isracard regex parser  — section-aware regex for ישראכרט PDF format.
+  3. Claude API fallback    — sends raw text to claude-sonnet-4-6 for JSON extraction.
 
-Cal credit card PDFs store Hebrew text in visual (left-to-right) order,
+Both Cal and Isracard PDFs store Hebrew text in visual (left-to-right) order,
 which reverses both the character order within each word and the word order
-on each line. This module corrects both issues automatically.
+on each line. The fix_rtl() helper corrects both issues.
 """
 
+import json
+import os
 import re
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import anthropic
 import pandas as pd
 import pdfplumber
 
@@ -65,6 +70,72 @@ CATEGORY_MAP: dict[str, str] = {
 
 # Required output columns (order matters for downstream use)
 REQUIRED_COLUMNS: list[str] = ['date', 'merchant', 'amount', 'category']
+
+# ── Isracard constants ─────────────────────────────────────────────────────────
+#
+# Isracard PDFs are split into two sections:
+#   Section A: ל"וחב תושיכר  — foreign-currency purchases
+#   Section B: ץראב - וכוז / וביוחש תוקסע — local (Israel) purchases
+#
+# Local line layout (left-to-right as extracted):
+#   [N ךותמ M םולשת]  CHARGE  ORIGINAL  CATEGORY_REV  MERCHANT_REV  [CARD_TYPE]  DD/MM/YY
+#
+# Foreign line layouts:
+#   NIS-billed:  CHARGE ₪ CHARGE  MERCHANT  TYPE_CODE  DD/MM/YY
+#   USD-billed:  CHARGE  FEE  RATE  CONV_DATE  USD_AMT $  MERCHANT  TYPE_CODE  DD/MM/YY
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Reversed Hebrew → canonical category (Isracard local section)
+_IC_CATEGORY_MAP: dict[str, str] = {
+    'תונוש':        'שונות',
+    'טרופס/יאנפ':  'בילוי ופנאי',
+    'המראפ':        'בריאות ורפואה',
+    'רפוס/תלוכמ':  'סופרמרקט',
+    'הפק/תודעסמ':  'מזון ומסעדות',
+    'תרושקת':       'תקשורת',
+    'קלד':          'דלק ותחבורה',
+    'בכר יתוריש':  'דלק ותחבורה',
+    'יאופר תורש':  'בריאות ורפואה',
+    'תיב ילכ':     'ריהוט ובית',
+    'השבלה':        'קניות ואופנה',
+}
+
+# Card-type / payment-mode tokens to strip from the middle section
+_IC_STRIP_RE = re.compile(
+    r'דיינ\.שת'    # digital payment (תשלום דיגיטלי reversed)
+    r'|עבק\.ה'     # standing order (הוראת קבע reversed)
+    r'|גצוה אל'    # "not displayed" (לא הוצג reversed)
+)
+
+# Local Isracard transaction line (re.search — handles installment prefix & promo text)
+# Captures: group 1=charge, group 2=original, group 3=middle, group 4=date
+_IC_LOCAL_RE = re.compile(
+    r'([\d,]+\.\d+)'                         # group 1: charge amount
+    r'\s+([\d,]+\.\d+)'                      # group 2: original amount
+    r'\s+(.+)'                               # group 3: middle (category + merchant + card type)
+    r'\s+(\d{2}/\d{2}/\d{2,4})\s*$'         # group 4: date
+)
+
+# Foreign NIS-billed: "105.00 ₪ 105.00 A DOBE.COM א 19/12/25"
+_IC_FOR_NIS_RE = re.compile(
+    r'^(-?[\d,]+\.\d+)'                      # group 1: charge NIS (possibly negative = refund)
+    r'\s+₪\s+[-\d,]+\.\d+'                  # ₪ original NIS (skip)
+    r'\s+(.+?)'                              # group 2: merchant name
+    r'\s+[א-ת]'                             # single Hebrew type code
+    r'\s+(\d{2}/\d{2}/\d{2,4})\s*$'         # group 3: date
+)
+
+# Foreign USD-billed: "19.46 0.28 3.2020 12/12/25 5.99 $ L INGOCHAMPION.COM א 12/12/25"
+_IC_FOR_USD_RE = re.compile(
+    r'^([\d,]+\.\d+)'                        # group 1: charge NIS
+    r'\s+[\d,]+\.\d+'                        # fee (skip)
+    r'\s+[\d.]+\s+'                          # exchange rate (skip)
+    r'\d{2}/\d{2}/\d{2,4}\s+'               # conversion date (skip)
+    r'[\d,]+\.\d+\s+\$\s+'                  # USD amount + $ (skip)
+    r'(.+?)'                                 # group 2: merchant name
+    r'\s+[א-ת]'                             # single Hebrew type code
+    r'\s+(\d{2}/\d{2}/\d{2,4})\s*$'         # group 3: date
+)
 
 
 # ── Hebrew RTL correction ─────────────────────────────────────────────────────
@@ -182,6 +253,127 @@ def _parse_line(line: str) -> dict[str, Any] | None:
     }
 
 
+# ── Isracard parsing ──────────────────────────────────────────────────────────
+
+def _ic_extract_category_and_merchant(middle: str) -> tuple[str, str]:
+    """
+    Split an Isracard local-section middle string into category and merchant.
+
+    Strips payment-mode tokens first, then matches the longest known reversed
+    category prefix. Remainder is the raw (reversed) merchant name.
+    """
+    clean = _IC_STRIP_RE.sub('', middle).strip()
+    for cat_key in sorted(_IC_CATEGORY_MAP, key=len, reverse=True):
+        if clean.startswith(cat_key):
+            merchant_raw = clean[len(cat_key):].strip()
+            return _IC_CATEGORY_MAP[cat_key], merchant_raw
+    return 'שונות', clean
+
+
+def _fix_latin_merchant(name: str) -> str:
+    """
+    Remove pdfplumber's space artifact in Latin merchant names.
+
+    pdfplumber sometimes separates the first character from the rest:
+    "A DOBE.COM" → "ADOBE.COM", "G OOGLE ONE" → "GOOGLE ONE".
+    """
+    return re.sub(r'^([A-Z]) ([A-Z])', r'\1\2', name.strip())
+
+
+def _parse_date_isracard(date_str: str) -> pd.Timestamp:
+    """Parse a DD/MM/YY or DD/MM/YYYY date string from an Isracard PDF."""
+    fmt = '%d/%m/%y' if len(date_str) == 8 else '%d/%m/%Y'
+    return pd.to_datetime(date_str, format=fmt)
+
+
+def _detect_isracard(lines: list[str]) -> bool:
+    """Return True if the extracted lines appear to be an Isracard statement."""
+    for line in lines[:60]:
+        if 'ל"וחב תושיכר' in line or ('ץראב' in line and 'וכוז' in line):
+            return True
+    return False
+
+
+def _parse_isracard_from_lines(lines: list[str]) -> pd.DataFrame:
+    """
+    Parse Isracard statement lines into a normalised transactions DataFrame.
+
+    Processes two sections:
+      - Foreign (ל"וחב תושיכר): Latin merchant names, NIS or USD billed.
+      - Local  (ץראב ...):      Hebrew merchant/category in reversed visual order.
+
+    Args:
+        lines: Text lines from pdfplumber extraction.
+
+    Returns:
+        DataFrame with columns: date, merchant, amount, category.
+
+    Raises:
+        ValueError: If no valid transactions are found.
+    """
+    rows: list[dict] = []
+    section: str | None = None
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # ── Section detection ──
+        if 'ל"וחב תושיכר' in line:
+            section = 'foreign'
+            continue
+        if 'ץראב' in line and 'וכוז' in line:
+            section = 'local'
+            continue
+        # ── Total / summary lines — skip ──
+        if 'כ"הס' in line or 'מ"עמ' in line:
+            continue
+
+        # ── Local transactions ──
+        if section == 'local':
+            m = _IC_LOCAL_RE.search(line)
+            if not m:
+                continue
+            charge_str, middle, date_str = m.group(1), m.group(3), m.group(4)
+            amount = float(charge_str.replace(',', ''))
+            if amount <= 0:
+                continue
+            category, merchant_raw = _ic_extract_category_and_merchant(middle)
+            merchant = fix_rtl(merchant_raw).strip(' -"\'')
+            rows.append({
+                'date':     _parse_date_isracard(date_str),
+                'merchant': merchant or 'לא ידוע',
+                'amount':   amount,
+                'category': category,
+            })
+
+        # ── Foreign transactions ──
+        elif section == 'foreign':
+            m = _IC_FOR_NIS_RE.match(line) or _IC_FOR_USD_RE.match(line)
+            if not m:
+                continue
+            charge_str, merchant_raw, date_str = m.group(1), m.group(2), m.group(3)
+            amount = float(charge_str.replace(',', ''))
+            if amount <= 0:
+                continue
+            rows.append({
+                'date':     _parse_date_isracard(date_str),
+                'merchant': _fix_latin_merchant(merchant_raw),
+                'amount':   amount,
+                'category': 'שונות',
+            })
+
+    if not rows:
+        raise ValueError('לא נמצאו עסקאות בקובץ הישראכרט.')
+
+    return (
+        pd.DataFrame(rows)[REQUIRED_COLUMNS]
+        .sort_values('date')
+        .reset_index(drop=True)
+    )
+
+
 # ── PDF extraction ────────────────────────────────────────────────────────────
 
 def _extract_lines(source: Path | BytesIO) -> list[str]:
@@ -194,49 +386,152 @@ def _extract_lines(source: Path | BytesIO) -> list[str]:
     return lines
 
 
-def parse_pdf(source: Path | BytesIO) -> pd.DataFrame:
-    """
-    Parse a Cal credit card PDF statement into a normalised transactions DataFrame.
+def _extract_full_text(source: Path | BytesIO) -> str:
+    """Extract all text from a PDF as a single string (for Claude API fallback)."""
+    parts: list[str] = []
+    # Reset buffer position if BytesIO was already read
+    if isinstance(source, BytesIO):
+        source.seek(0)
+    with pdfplumber.open(source) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ''
+            if text.strip():
+                parts.append(text)
+    return '\n'.join(parts)
 
-    Tries pdfplumber text extraction first. If zero transactions are extracted,
-    raises ValueError so the caller can fall back to Claude API parsing.
+
+_CLAUDE_EXTRACTION_PROMPT = """\
+להלן טקסט גולמי שחולץ מקובץ PDF של פירוט כרטיס אשראי (ישראכרט, כאל, ויזה, או אחר).
+חלץ את כל העסקאות מהטקסט והחזר JSON בלבד — מערך של אובייקטים, כל אחד עם השדות:
+  "date"     — תאריך בפורמט DD/MM/YYYY
+  "merchant" — שם בית העסק בעברית
+  "amount"   — סכום החיוב כמספר עשרוני (חיובי)
+  "category" — קטגוריה בעברית, אחת מ: מזון ומשקאות, סופרמרקט, קניות ואופנה,
+               דלק ותחבורה, בילוי ופנאי, בריאות ורפואה, תקשורת, ריהוט ובית,
+               מוצרי חשמל, ביטוח ופיננסים, טיפוח ויופי, שונות
+
+כללים:
+- כלול רק חיובים ממשיים (לא עמלות, לא הפניות לדפים אחרים).
+- אם הסכום מופיע בשקלים — השתמש בו ישירות.
+- אם שם העסק מופיע הפוך (ויזואלית) — תקן אותו לקריא.
+- החזר JSON בלבד, ללא טקסט נוסף.
+
+טקסט ה-PDF:
+"""
+
+
+def _parse_via_claude(source: Path | BytesIO) -> pd.DataFrame:
+    """
+    Fallback: use Claude API to extract transactions from unrecognised PDF formats.
 
     Args:
-        source: Path to a PDF file, or an in-memory BytesIO object (e.g. from
-                Streamlit's file_uploader).
+        source: Path or BytesIO of the PDF file.
 
     Returns:
-        DataFrame with columns:
-          - date     (datetime64[ns])
-          - merchant (str)
-          - amount   (float)
-          - category (str)
-        Sorted by date ascending.
+        Normalised transactions DataFrame.
 
     Raises:
-        ValueError: If the file cannot be opened or contains no recognisable
-                    transactions (wrong format, wrong card issuer, etc.).
+        ValueError: If the API key is missing, or Claude returns no valid transactions.
+    """
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        try:
+            import streamlit as st
+            api_key = st.secrets.get('ANTHROPIC_API_KEY')
+        except Exception:
+            pass
+    if not api_key:
+        raise ValueError(
+            'לא נמצא מפתח ANTHROPIC_API_KEY. '
+            'הגדר אותו ב-.streamlit/secrets.toml או כמשתנה סביבתי.'
+        )
+
+    raw_text = _extract_full_text(source)
+    if not raw_text.strip():
+        raise ValueError('לא ניתן לחלץ טקסט מהקובץ.')
+
+    client = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model='claude-sonnet-4-6',
+        max_tokens=4096,
+        messages=[{'role': 'user', 'content': _CLAUDE_EXTRACTION_PROMPT + raw_text}],
+    )
+
+    response_text = message.content[0].text.strip()
+    # Strip markdown code fences if present
+    if response_text.startswith('```'):
+        response_text = re.sub(r'^```[a-z]*\n?', '', response_text)
+        response_text = re.sub(r'\n?```$', '', response_text)
+
+    try:
+        records = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f'Claude החזיר תגובה לא תקינה: {exc}') from exc
+
+    if not records:
+        raise ValueError('Claude לא הצליח לחלץ עסקאות מהקובץ.')
+
+    rows: list[dict] = []
+    for rec in records:
+        try:
+            rows.append({
+                'date':     pd.to_datetime(rec['date'], format='%d/%m/%Y'),
+                'merchant': str(rec.get('merchant', 'לא ידוע')).strip(),
+                'amount':   float(rec['amount']),
+                'category': str(rec.get('category', 'שונות')).strip(),
+            })
+        except (KeyError, ValueError):
+            continue  # skip malformed records
+
+    if not rows:
+        raise ValueError('לא נמצאו עסקאות תקינות בתגובת Claude.')
+
+    return (
+        pd.DataFrame(rows)[REQUIRED_COLUMNS]
+        .sort_values('date')
+        .reset_index(drop=True)
+    )
+
+
+def parse_pdf(source: Path | BytesIO) -> pd.DataFrame:
+    """
+    Parse a credit card PDF statement into a normalised transactions DataFrame.
+
+    Tries pdfplumber + regex parsing first (optimised for Cal card format).
+    If zero transactions are found, falls back to Claude API extraction,
+    which supports Isracard, Visa, and other Hebrew card formats.
+
+    Args:
+        source: Path to a PDF file, or an in-memory BytesIO object.
+
+    Returns:
+        DataFrame with columns: date, merchant, amount, category.
+
+    Raises:
+        ValueError: If parsing fails via both methods.
     """
     try:
         lines = _extract_lines(source)
     except Exception as exc:
         raise ValueError(f'Failed to open PDF: {exc}') from exc
 
+    # ── Path 2: Isracard regex parser ──
+    if _detect_isracard(lines):
+        return _parse_isracard_from_lines(lines)
+
+    # ── Path 1: Cal card regex parser ──
     rows: list[dict] = []
     for line in lines:
         record = _parse_line(line)
         if record:
             rows.append(record)
 
-    if not rows:
-        raise ValueError(
-            'לא נמצאו עסקאות בקובץ. '
-            'ודא שהקובץ הוא פירוט כרטיס אשראי של כאל.'
+    if rows:
+        return (
+            pd.DataFrame(rows)[REQUIRED_COLUMNS]
+            .sort_values('date')
+            .reset_index(drop=True)
         )
 
-    df = (
-        pd.DataFrame(rows)[REQUIRED_COLUMNS]
-        .sort_values('date')
-        .reset_index(drop=True)
-    )
-    return df
+    # ── Path 3: Claude API fallback ──
+    return _parse_via_claude(source)
