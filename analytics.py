@@ -100,6 +100,7 @@ def get_mock_data() -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
+    df["billing_month"] = df["date"].dt.to_period("M")
     return df.sort_values("date").reset_index(drop=True)
 
 
@@ -115,7 +116,7 @@ def compute_kpis(df: pd.DataFrame) -> dict[str, Any]:
         Dict with keys: total_spend, monthly_avg, transaction_count, largest_txn.
     """
     total_spend: float = df["amount"].sum()
-    n_months: int = df["date"].dt.to_period("M").nunique()
+    n_months: int = df["billing_month"].nunique() if "billing_month" in df.columns else df["date"].dt.to_period("M").nunique()
     monthly_avg: float = total_spend / n_months if n_months > 0 else 0.0
     largest_txn: pd.Series | None = df.loc[df["amount"].idxmax()] if not df.empty else None
 
@@ -202,7 +203,7 @@ def get_anomalies(df: pd.DataFrame) -> list[dict[str, str]]:
 
     # ── Month-over-month spikes ──
     df2 = df.copy()
-    df2["month"] = df2["date"].dt.to_period("M")
+    df2["month"] = df2["billing_month"] if "billing_month" in df2.columns else df2["date"].dt.to_period("M")
     pivot = df2.groupby(["month", "category"])["amount"].sum().unstack(fill_value=0.0)
     sorted_months = sorted(pivot.index.tolist())
 

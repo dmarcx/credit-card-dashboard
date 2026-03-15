@@ -422,9 +422,9 @@ def _process_uploads(files: list) -> tuple[pd.DataFrame | None, list[str]]:
                 billing = _parse_billing_month(f.name)
                 if billing is None:
                     billing = df["date"].dt.to_period("M").value_counts().idxmax()
-                # Stamp every transaction with the 1st of the billing month so
-                # that all grouping, filtering, and KPIs reflect billing periods.
-                df["date"] = pd.Timestamp(billing.year, billing.month, 1)
+                # Add billing_month column for grouping/filtering.
+                # The original 'date' column is kept untouched for display.
+                df["billing_month"] = billing
                 st.session_state[cache_key] = df
             except ValueError as exc:
                 errors.append(f"❌ {f.name}: {exc}")
@@ -535,7 +535,7 @@ def main() -> None:
         if df_all is not None:
             st.divider()
 
-            month_counts = df_all["date"].dt.to_period("M").value_counts()
+            month_counts = df_all["billing_month"].value_counts()
             all_periods = sorted(
                 [str(m) for m, n in month_counts.items() if n >= MIN_MONTH_TRANSACTIONS],
                 reverse=True,
@@ -576,7 +576,7 @@ def main() -> None:
             st.divider()
 
             source = "קובץ PDF" if st.session_state.get("data_source") == "pdf" else "נתוני הדגמה"
-            n_months_total = df_all["date"].dt.to_period("M").nunique()
+            n_months_total = df_all["billing_month"].nunique()
             st.caption(f"מקור: {source}")
             st.caption(f"📊 {len(df_all):,} עסקאות | {n_months_total} חודשים בקובץ")
             st.caption("🔒 קבצי PDF לא מועלים ל-GitHub")
@@ -590,7 +590,7 @@ def main() -> None:
     # ── Apply filters ─────────────────────────────────────────────────────────────
     df = df_all.copy()
     if selected_months:
-        df = df[df["date"].dt.to_period("M").astype(str).isin(selected_months)]
+        df = df[df["billing_month"].astype(str).isin(selected_months)]
     if selected_cats:
         df = df[df["category"].isin(selected_cats)]
 
