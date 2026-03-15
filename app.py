@@ -120,10 +120,10 @@ section[data-testid="stSidebar"] label {
 .kpi.b::after { background: var(--blue); }
 .kpi.e::after { background: var(--green); }
 .kpi-ico  { font-size: 1.5rem; opacity: 0.18; position: absolute; left: 1.2rem; top: 1.2rem; }
-.kpi-lbl  { font-size: 0.82rem; font-weight: 700; color: var(--tx2); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.5rem; }
-.kpi-val  { font-family: 'IBM Plex Mono', monospace; font-size: 2.3rem; font-weight: 500; color: var(--tx); direction: ltr; text-align: right; line-height: 1; }
-.kpi-val small { font-size: 1.2rem; color: var(--tx2); }
-.kpi-hint { font-size: 0.82rem; color: var(--tx3); margin-top: 0.35rem; }
+.kpi-lbl  { font-size: 1rem; font-weight: 700; color: var(--tx2); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.5rem; }
+.kpi-val  { font-family: 'IBM Plex Mono', monospace; font-size: 2.8rem; font-weight: 500; color: var(--tx); direction: ltr; text-align: right; line-height: 1; }
+.kpi-val small { font-size: 1.5rem; color: var(--tx2); }
+.kpi-hint { font-size: 1rem; color: var(--tx3); margin-top: 0.35rem; }
 
 /* ── Section Dividers ── */
 .sec {
@@ -160,6 +160,16 @@ section[data-testid="stSidebar"] label {
     box-shadow: 0 0 0 3px var(--accent-dim) !important;
 }
 .stTextInput label { color: var(--tx2) !important; font-size: 0.9rem !important; }
+
+/* ── Dataframe tables ── */
+[data-testid="stDataFrame"] .ag-cell,
+[data-testid="stDataFrame"] .ag-header-cell-text {
+    font-size: 1rem !important;
+    font-family: 'Heebo', sans-serif !important;
+}
+[data-testid="stDataFrame"] .ag-cell {
+    line-height: 2 !important;
+}
 
 /* ── Misc ── */
 hr { border-color: var(--border) !important; margin: 1.2rem 0 !important; }
@@ -272,8 +282,9 @@ def render_merchants_chart(df: pd.DataFrame) -> None:
         marker=dict(color=CHART_COLORS[0], opacity=0.82, line=dict(width=0)),
         hovertemplate="<b>%{y}</b><br>₪%{x:,.0f}<extra></extra>",
         text=[f"₪{v:,.0f}" for v in merchant_df["total"]],
-        textposition="outside",
-        textfont=dict(color=PLOTLY_TITLE, size=15),
+        textposition="inside",
+        insidetextanchor="end",
+        textfont=dict(color="#ffffff", size=15),
     ))
     fig = _dark_layout(fig, "ספקים מובילים")
     fig.update_layout(
@@ -281,7 +292,7 @@ def render_merchants_chart(df: pd.DataFrame) -> None:
         xaxis=dict(visible=False),
         yaxis=dict(autorange="reversed", tickfont=dict(size=14)),
         bargap=0.3,
-        margin=dict(t=52, b=10, l=10, r=110),
+        margin=dict(t=52, b=10, l=10, r=20),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -320,7 +331,7 @@ def render_transactions_table(df: pd.DataFrame) -> None:
         display,
         use_container_width=True,
         hide_index=True,
-        height=420,
+        height=500,
         column_config={"סכום (₪)": st.column_config.NumberColumn(format="₪%.2f")},
     )
     st.caption(f"מציג {len(display):,} מתוך {len(df):,} עסקאות")
@@ -417,6 +428,9 @@ def main() -> None:
         if uploaded_files:
             df_parsed, parse_errors = _process_uploads(uploaded_files)
             if df_parsed is not None:
+                if st.session_state.get("data_source") != "pdf":
+                    st.session_state.pop("filter_months", None)
+                    st.session_state.pop("filter_cats", None)
                 st.session_state.df_all = df_parsed
                 st.session_state.data_source = "pdf"
             for err in parse_errors:
@@ -427,6 +441,8 @@ def main() -> None:
             if st.button("🎲 נתוני הדגמה", use_container_width=True):
                 st.session_state.df_all = get_mock_data()
                 st.session_state.data_source = "demo"
+                st.session_state.pop("filter_months", None)
+                st.session_state.pop("filter_cats", None)
 
         # Clear button (visible only when data is present)
         if st.session_state.get("df_all") is not None:
@@ -444,19 +460,25 @@ def main() -> None:
                 df_all["date"].dt.to_period("M").unique().astype(str).tolist(),
                 reverse=True,
             )
+            # key= lets Streamlit persist selections across reruns via session_state.
+            # We only set the initial value; after that Streamlit owns the key.
+            if "filter_months" not in st.session_state:
+                st.session_state["filter_months"] = all_periods
             selected_months = st.multiselect(
                 "חודשים",
                 options=all_periods,
-                default=all_periods,
+                key="filter_months",
                 format_func=_period_to_hebrew,
             )
             st.divider()
 
             all_cats = sorted(df_all["category"].unique().tolist())
+            if "filter_cats" not in st.session_state:
+                st.session_state["filter_cats"] = all_cats
             selected_cats = st.multiselect(
                 "קטגוריות",
                 options=all_cats,
-                default=all_cats,
+                key="filter_cats",
             )
             st.divider()
 
