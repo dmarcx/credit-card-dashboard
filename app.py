@@ -267,6 +267,88 @@ hr { border-color: var(--border) !important; margin: 1.2rem 0 !important; }
 ::-webkit-scrollbar            { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track      { background: var(--bg); }
 ::-webkit-scrollbar-thumb      { background: var(--border-hi); border-radius: 3px; }
+
+/* ── Mobile / Responsive ── */
+@media (max-width: 768px) {
+    .main .block-container {
+        padding: 0.6rem 0.6rem 3rem !important;
+        max-width: 100% !important;
+    }
+
+    /* Stack all Streamlit columns vertically */
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        width: 100% !important;
+        flex: 1 1 100% !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    /* KPI — 2 columns on tablet */
+    .kpi-row {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 0.6rem !important;
+    }
+    .kpi { padding: 0.9rem 1rem 0.8rem !important; }
+    .kpi-val { font-size: 2rem !important; }
+    .kpi-lbl { font-size: 0.8rem !important; }
+    .kpi-ico { font-size: 1.2rem !important; }
+
+    /* Header */
+    .hdr { gap: 0.5rem; padding: 0.6rem 0 0.5rem; }
+    .hdr-title { font-size: 1.5rem !important; }
+    .hdr-sub   { font-size: 0.82rem !important; }
+    .hdr-logo img { height: 48px !important; }
+
+    /* Section labels */
+    .sec { margin: 1rem 0 0.5rem !important; }
+
+    /* Insight cards */
+    .ic { font-size: 0.88rem !important; padding: 0.7rem 0.9rem !important; }
+
+    /* Chip buttons — compact when stacked */
+    [data-testid="stHorizontalBlock"] .stButton button {
+        font-size: 0.75rem !important;
+        padding: 0.15rem 0.5rem !important;
+    }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        min-width: 260px !important;
+        max-width: 85vw !important;
+    }
+
+    /* Transactions table — shorter on mobile */
+    [data-testid="stDataFrame"] > div {
+        max-height: 350px !important;
+    }
+}
+
+@media (max-width: 480px) {
+    /* KPI — single column on phone */
+    .kpi-row {
+        grid-template-columns: 1fr !important;
+    }
+    .kpi-val { font-size: 1.8rem !important; }
+
+    /* Header — stack logo + text */
+    .hdr {
+        flex-direction: column !important;
+        align-items: center !important;
+        text-align: center !important;
+    }
+    .hdr-title { font-size: 1.3rem !important; }
+
+    /* Dataframe cells smaller on phone */
+    [data-testid="stDataFrame"] .ag-cell {
+        font-size: 1rem !important;
+    }
+    [data-testid="stDataFrame"] .ag-header-cell-text {
+        font-size: 0.9rem !important;
+    }
+}
 """
 
 
@@ -283,6 +365,11 @@ def inject_css() -> None:
     )
     css = _CSS_IMPORT + root + _CSS_STATIC
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    # Ensure mobile browsers render at device width (override Streamlit's default viewport)
+    st.markdown(
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────────
@@ -383,14 +470,14 @@ def render_pie_chart(df: pd.DataFrame, active_cat: str | None = None,
     fig.update_layout(
         showlegend=True,
         legend=dict(
-            orientation="v",
-            x=1.02, xanchor="left",
-            y=0.5, yanchor="middle",
-            font=dict(size=13, color=p["plotly_text"]),
+            orientation="h",
+            x=0.5, xanchor="center",
+            y=-0.08, yanchor="top",
+            font=dict(size=12, color=p["plotly_text"]),
             bgcolor="rgba(0,0,0,0)",
         ),
         height=460,
-        margin=dict(t=52, b=20, l=10, r=160),
+        margin=dict(t=52, b=80, l=10, r=10),
         annotations=[dict(
             text=f"₪{df['amount'].sum():,.0f}",
             x=0.5, y=0.5,
@@ -711,7 +798,7 @@ def main() -> None:
         page_title="דשבורד הוצאות | כרטיס אשראי",
         page_icon="💳",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
     inject_css()
 
